@@ -34,6 +34,11 @@ def get_watchdog(filename, default: Optional[dict] = None):
         def __repr__(self):
             return self.data.__repr__()
 
+        def __eq__(self, other):
+            if isinstance(other, _WatchdogContainer):
+                return self.data == other.data
+            return self.data == other
+
     class _WatchdogList(_WatchdogContainer):
         def __init__(self, data: list):
             self.data = []
@@ -96,6 +101,9 @@ def get_watchdog(filename, default: Optional[dict] = None):
 
         def items(self):
             return self.data.items()
+
+        def get(self, key, default=None):
+            return self.data.get(key, default)
 
     try:
         with open(filename, "r") as fp:

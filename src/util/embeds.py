@@ -17,7 +17,8 @@ def error(msg: str):
 def success(msg: str):
     embed = disnake.Embed(
         color=disnake.Color.green(),
-        title="Success")
+        title="Success",
+        description=msg)
     embed.set_footer(text="\u00A9Webcage 2024-\u221E. Glory to the Company.",
                      icon_url=WUCK)
     return embed

@@ -6,6 +6,8 @@ from util.watchdog import get_watchdog
 
 # from cogs.wips import WipCog
 from cogs.wipify import WipifyCog
+from cogs.wip import WipCog
+
 import util.decorators
 
 # get secrets (just a json file)
@@ -26,5 +28,6 @@ bot = commands.InteractionBot(
 # add cogs
 # bot.add_cog(WipCog(bot, state))
 bot.add_cog(WipifyCog(bot, state))
+bot.add_cog(WipCog(bot, state))
 
 bot.run(token=secrets["bot_token"])

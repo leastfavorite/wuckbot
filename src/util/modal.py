@@ -16,4 +16,5 @@ async def send_modal(inter: disnake.ApplicationCommandInteraction,
 
     await modal_inter.response.defer(with_message=True, ephemeral=True)
     inter.response = modal_inter.response
+    inter.followup = modal_inter.followup
     return SimpleNamespace(**modal_inter.text_values)
