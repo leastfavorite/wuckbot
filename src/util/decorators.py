@@ -13,6 +13,7 @@ class UserError(Exception):
     pass
 
 
+# TODO replace
 def set_admin_id(id_: int):
     global _ADMIN_ID
     _ADMIN_ID = id_
@@ -27,6 +28,7 @@ def error_handler(f):
             print(id(inter.response))
             return await user_error_handler(f)(self, inter, *args, **kwargs)
         except asyncio.TimeoutError:
+            print("timed out!")
             pass
         except Exception as e:
             print(id(inter.response))

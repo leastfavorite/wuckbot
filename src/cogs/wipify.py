@@ -10,14 +10,24 @@ from secrets import token_hex
 from util.wip import Wip
 
 
+STATE_MANIFEST = {
+    "wips": list[Wip]
+}
+
 class WipifyCog(commands.Cog):
     def __init__(self,
-                 bot: commands.InteractionBot,
-                 state):
+                 bot: commands.InteractionBot):
         self.bot = bot
-        self.state = state
-        if "wips" not in self.state:
-            self.state.wips = []
+
+    # delete all bot pin messages
+    @commands.Cog.listener()
+    async def on_message(self, message: disnake.Message):
+        if message.type != disnake.MessageType.pins_add:
+            return
+        if message.author.id != message.guild.me.id:
+            return
+        if message.channel.category.name == "WIPs":
+            await message.delete()
 
     # sends the wip modal and validates all input text
     async def _send_wip_modal(self,
@@ -109,18 +119,20 @@ class WipifyCog(commands.Cog):
                 raise UserError(
                     "Use this command on a message with an audio file.")
 
-        modal = await self._send_wip_modal(inter, self._get_modal(
-            title=f"Create WIP with {message.author.global_name}",
-            song_title_placeholder=message.attachments[0].filename,
-            link_soundcloud=False
-        ))
+        modal = await self._send_wip_modal(
+            inter,
+            modal_title=f"Create WIP with {message.author.global_name}",
+            modal_song_placeholder=message.attachments[0].filename,
+            modal_offer_soundcloud=False
+        )
 
         await Wip.from_channel(self.state,
-                               name=modal.title,
+                               name=modal.name,
                                progress=modal.progress,
                                soundcloud=modal.soundcloud,
                                existing_channel=None,
-                               extra_members={inter.author, message.author})
+                               extra_members=tuple({
+                                   inter.author, message.author}))
 
-        await inter.response.send_message(embed=embeds.success(
+        await inter.followup.send(embed=embeds.success(
             "Channel created successfully."))

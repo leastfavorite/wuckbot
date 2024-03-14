@@ -1,15 +1,12 @@
 import disnake
 from disnake.ext import commands
-import asyncio
-
 from util.decorators import error_handler
-
 from util.modal import send_modal
 
+
 class ModalCog(commands.Cog):
-    def __init__(self, bot: commands.InteractionBot, state):
+    def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
-        self.state = state
 
     @commands.slash_command(description="Balls")
     @error_handler
@@ -26,3 +23,7 @@ class ModalCog(commands.Cog):
         )
 
         raise ValueError("hi")
+
+
+def setup(bot):
+    bot.add_cog(ModalCog(bot))
