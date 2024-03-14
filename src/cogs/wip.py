@@ -16,6 +16,7 @@ STATE_MANIFEST = {
     "wips": list[Wip]
 }
 
+
 def _wip_wrapper(f):
     @wraps(f)
     async def _inner(self, inter: disnake.AppCmdInter, *args, **kwargs):
@@ -142,6 +143,7 @@ class WipCog(commands.Cog):
 
         await inter.followup.send(ephemeral=True,
                                   embed=embeds.success(response))
+
 
 def setup(bot):
     bot.add_cog(WipCog(bot))
