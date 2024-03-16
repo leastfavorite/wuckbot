@@ -5,18 +5,11 @@ import traceback
 import asyncio
 
 import util.embeds as embeds
-# a non-const global ? somebody shoot me !
-_ADMIN_ID = -1
+from util.json import Secrets
 
 
 class UserError(Exception):
     pass
-
-
-# TODO replace
-def set_admin_id(id_: int):
-    global _ADMIN_ID
-    _ADMIN_ID = id_
 
 
 def error_handler(f):
@@ -25,13 +18,10 @@ def error_handler(f):
                      inter: disnake.ApplicationCommandInteraction,
                      *args, **kwargs):
         try:
-            print(id(inter.response))
             return await user_error_handler(f)(self, inter, *args, **kwargs)
         except asyncio.TimeoutError:
-            print("timed out!")
             pass
         except Exception as e:
-            print(id(inter.response))
             # format embed
             traceback_text = traceback.format_tb(e.__traceback__)
             executor = inter.author.mention
@@ -47,7 +37,10 @@ def error_handler(f):
             embed.add_field("Command", command)
 
             # get admin/channel
-            admin = disnake.utils.get(inter.guild.members, id=_ADMIN_ID)
+            admin: disnake.User = Secrets().admin
+            if inter.guild not in admin.mutual_guilds:
+                admin = None
+
             err_channel = disnake.utils.get(
                 inter.guild.text_channels, name="bot-errors")
             footer = ""
@@ -67,7 +60,6 @@ def error_handler(f):
             # send error response to inter
             user_embed = embeds.error(
                 "An unknown error has occured. An admin has been notified.")
-            print(f"{inter.response.is_done()=}")
             if inter.response.is_done():
                 await inter.followup.send(
                     ephemeral=True, embed=user_embed)

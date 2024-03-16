@@ -12,6 +12,9 @@ class SoundcloudTrack:
 
 
 class Wip(JsonSerializable):
+    # assuming we know how to serialize SoundcloudTrack, TextChannel, etc.
+    # this class can now be initialized into smart, fancy datatypes from JSON
+    # without any of this type information cluttering up the JSON file
     MANIFEST = {
         "name": str,
         "progress": int,
@@ -24,7 +27,7 @@ class Wip(JsonSerializable):
         },
         "messages": {
             "pinned": Optional[disnake.Message],
-            "update": Optional[disnake.Message]
+            "last_update": Optional[disnake.Message]
         },
         "work_timestamp": datetime
     }
@@ -71,6 +74,36 @@ class Wip(JsonSerializable):
         if progress < 0 or progress > 100:
             raise UserError(f"Could not parse {progress} as a percentage.")
         return progress
+
+    @classmethod
+    def _get_new_channel_kwargs(cls, *,
+                                name: str,
+                                progress: int,
+                                category: disnake.CategoryChannel,
+                                access_roles: list[disnake.Role],
+                                deny_roles: list[disnake.Role]):
+        guild: disnake.Guild = access_roles[0].guild
+
+        access_roles = set(access_roles)
+        access_roles.add(guild.me)
+
+        deny_roles = set(deny_roles)
+        deny_roles.add(guild.default_role)
+
+        # get roles needed for permission overwrites
+        return {
+            "name": cls._get_channel_name(name, progress),
+            "topic": "Use /wip to update this WIP",
+            "reason": "/wipify",
+            "category": category,
+            "position": 0,
+            "overwrites": {
+                **{role: disnake.PermissionOverwrite(view_channel=True)
+                   for role in access_roles},
+                **{role: disnake.PermissionOverwrite(view_channel=False)
+                   for role in deny_roles}
+            }
+        }
 
     @classmethod
     async def from_channel(
@@ -147,24 +180,26 @@ class Wip(JsonSerializable):
             channel = await guild.create_text_channel(**kwargs)
 
         # create the wip
-        wip = Wip(None,
-                  name=name,
+        wip = Wip(name=name,
                   progress=progress,
                   soundcloud=soundcloud,
                   channel=channel,
                   role=new_role,
+                  credit={
+                      "producers": [],
+                      "vocalists": []
+                  },
                   messages={
                       "pinned": None,
-                      "update": None
+                      "last_update": None
                   },
                   work_timestamp=disnake.utils.utcnow())
 
         # send the pinned message
-        pinned = await channel.send(embed=wip.get_pinned_embed())
-        await pinned.pin()
-        wip.messages.pinned = pinned
+        await wip.update_pinned()
 
         State().wips.append(wip)
+        State().save()
         return wip
 
     async def update_pinned(self):
@@ -194,16 +229,18 @@ class Wip(JsonSerializable):
         # - link to most recent update
         # - link to soundcloud
         # (maybe with buttons?)
-        if self.messages.pinned is not None:
+        if self.messages.pinned is None:
             self.messages.pinned = await self.channel.send(embed=embed)
-            await self.messages.pinned.pin()
         else:
             await self.messages.pinned.edit(embed=embed)
+
+        if not self.messages.pinned.pinned:
+            await self.messages.pinned.pin()
 
     async def edit(self, *,
                    name: Optional[str] = None,
                    progress: Optional[Union[str, int]] = None,
-                   update: Optional[disnake.Message] = None,
+                   last_update: Optional[disnake.Message] = None,
                    work_timestamp: Optional[datetime] = None):
 
         if name is not None:
@@ -215,13 +252,13 @@ class Wip(JsonSerializable):
         if progress is not None:
             progress = self._purify_progress(progress)
 
-        self.name = name
-        self.progress = progress
-        self.update = update
-        self.work_timestamp = work_timestamp
+        self.name = name or self.name
+        self.progress = progress or self.progress
+        self.messages.last_update = last_update or self.messages.last_update
+        self.work_timestamp = work_timestamp or self.work_timestamp
 
         if name is not None or progress is not None:
-            await self._channel.edit(
+            await self.channel.edit(
                 name=self._get_channel_name(self.name, self.progress))
 
         await self.update_pinned()

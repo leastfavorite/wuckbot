@@ -5,6 +5,7 @@ import json
 import importlib
 from inspect import isclass
 from util.json import Secrets, State
+from util.soundcloud import SoundcloudClient
 
 SECRETS_FILENAME = "secrets.json"
 STATE_FILENAME = "state.json"
@@ -31,16 +32,31 @@ def main():
     # wait for ready to do async stuff--that way we still get to use
     # bot.run
     async def _on_ready():
+        sc = SoundcloudClient()
+        await sc.get_client_id()
+        await sc.close()
+        return
+
         cogs = []
+        state_manifest = {}
+        secrets_manifest = {
+            "test_guilds": list[int],
+            "bot_token": str,
+            "admin": disnake.User
+        }
         # import cogs (executing these once lets all classes get registered)
         for ext in disnake.utils.search_directory(COGS_FOLDER):
             ext_module = importlib.import_module(ext.removeprefix("src."))
             cogs.extend(c for c in ext_module.__dict__.values() if
                         isclass(c) and issubclass(c, commands.Cog))
+            state_manifest.update(
+                getattr(ext_module, "STATE_MANIFEST", {}))
+            secrets_manifest.update(
+                getattr(ext_module, "SECRETS_MANIFEST", {}))
 
         # load json
-        await State.from_file(bot, STATE_FILENAME)
-        await Secrets.from_file(bot, SECRETS_FILENAME)
+        await State.create(bot, STATE_FILENAME, state_manifest)
+        await Secrets.create(bot, SECRETS_FILENAME, secrets_manifest)
 
         # load cogs
         for cog in cogs:

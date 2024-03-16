@@ -86,7 +86,6 @@ class WipifyCog(commands.Cog):
 
         # create WIP
         await Wip.from_channel(
-            self.state,
             name=modal.name,
             progress=modal.progress,
             soundcloud=modal.soundcloud,
@@ -126,8 +125,7 @@ class WipifyCog(commands.Cog):
             modal_offer_soundcloud=False
         )
 
-        await Wip.from_channel(self.state,
-                               name=modal.name,
+        await Wip.from_channel(name=modal.name,
                                progress=modal.progress,
                                soundcloud=modal.soundcloud,
                                existing_channel=None,

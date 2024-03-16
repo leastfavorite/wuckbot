@@ -3,9 +3,10 @@ import typing
 import asyncio
 from typing import NamedTuple, Callable
 from inspect import signature
-from typeguard import check_type
+from typeguard import check_type, TypeCheckError
 
 import disnake
+from datetime import datetime, UTC
 from disnake.ext import tasks
 
 # Utility classes for serializing/deserializing from Json.
@@ -17,7 +18,8 @@ from disnake.ext import tasks
 
 # helpers
 def is_optional(t):
-    return typing.get_origin(t) is typing.Union and None in typing.get_args(t)
+    return typing.get_origin(t) is typing.Union and \
+        type(None) in typing.get_args(t)
 
 
 def typename(t):
@@ -56,7 +58,7 @@ class JsonSerializable:
         prior_scope = prior_scope or []
         ret = {}
         for key, type_ in manifest.items():
-            value = kwargs[key] or {}
+            value = kwargs.get(key)
 
             # if we have a nested dict entry
             if type(type_) is dict:
@@ -73,7 +75,13 @@ class JsonSerializable:
                     raise ValueError(f"Expected required value "
                                      f"{scope} in {cls.__qualname__}")
             else:
-                ret[key] = check_type(value, type_)
+                try:
+                    ret[key] = check_type(value, type_)
+                except TypeCheckError:
+                    scope = ".".join(prior_scope + [key])
+                    raise TypeCheckError(
+                        f"{scope} did not match typecheck: "
+                        f"expected {repr(type_)}, got {repr(value)}")
         return JsonDict(**ret)
 
     def __init__(self, **kwargs):
@@ -101,8 +109,9 @@ class JsonDb(metaclass=SingletonMeta):
     _deserializers = {}
 
     # builtins
-    def __init__(self, data):
-        self.data = data
+    def __init__(self, data, filename):
+        self.__dict__["data"] = data
+        self.__dict__["filename"] = filename
 
     def __getattr__(self, name):
         if name in self.data:
@@ -127,7 +136,7 @@ class JsonDb(metaclass=SingletonMeta):
             print(f"{filename} doesn't exist, using default...")
             data = {}
 
-        parsed = await cls.parse_with_manifest(client, data, manifest)
+        parsed = await cls.deserialize_with_manifest(client, data, manifest)
         ret = cls(parsed, filename)
 
         @tasks.loop(minutes=60)
@@ -135,7 +144,8 @@ class JsonDb(metaclass=SingletonMeta):
             ret.save()
 
     def save(self):
-        raise NotImplementedError("lel")  # TODO
+        with open(self.filename, "w") as fp:
+            json.dump(self.serialize(self.data), fp, indent=2)
 
     # Serialize
     @classmethod
@@ -161,10 +171,11 @@ class JsonDb(metaclass=SingletonMeta):
         if issubclass(type(data), JsonSerializable):
             if hasattr(data, "to_json"):
                 return data.to_json()
-            manifest = data.json_manifest()
+            manifest = type(data).MANIFEST
             return cls.serialize_to_manifest(data, manifest)
 
-        raise NotImplementedError(f"No way to serialize {typename(data)}")
+        raise NotImplementedError(
+            f"No way to serialize {typename(type(data))} ({repr(data)})")
 
     @classmethod
     def serialize_to_manifest(cls, data, manifest):
@@ -172,16 +183,16 @@ class JsonDb(metaclass=SingletonMeta):
         for attr_name, value_type in manifest.items():
             if type(value_type) is dict:
                 ret[attr_name] = cls.serialize_to_manifest(
-                    getattr(data, attr_name, default=None), value_type)
+                    getattr(data, attr_name, None), value_type)
             else:
-                attr = getattr(data, attr_name, default=None)
+                attr = getattr(data, attr_name, None)
                 ret[attr_name] = cls.serialize(attr)
         return ret
 
     # Deserialize
-    # this and parse_with_manifest make up the whole of the deserialization
+    # this and deserialize_with_manifest make up the whole of the deserialization
     # logic. deserialize takes in a data and tries to convert it to target,
-    # while parse_with_manifest takes in a dict and a manifest of types
+    # while deserialize_with_manifest takes in a dict and a manifest of types
     # and tries to convert that dict to that manifest's specification.
     @classmethod
     async def deserialize(cls,
@@ -192,16 +203,16 @@ class JsonDb(metaclass=SingletonMeta):
             return None
 
         if type(target) is dict:
-            return await cls.parse_with_manifest(client, data, target)
+            return await cls.deserialize_with_manifest(client, data, target)
 
         if is_optional(target):
-            ty = filter(lambda x: x is not type(None), typing.get_args(target))
+            ty = list(filter(
+                lambda x: x is not type(None), typing.get_args(target)))
             if len(ty) != 1:
                 raise ManifestError(f"Unknown type: {typename(target)}")
             target = ty[0]
 
-        TargetType = target if type(target) is type else \
-            typing.get_origin(target)
+        TargetType = typing.get_origin(target) or target
         args = typing.get_args(target)
 
         if TargetType in [str, int, float, bool, type(None)]:
@@ -218,9 +229,9 @@ class JsonDb(metaclass=SingletonMeta):
             ValType = args[1]
 
             all_keys = await asyncio.gather(
-                cls.deserialize(client, k, KeyType) for k in data.keys())
+                *(cls.deserialize(client, k, KeyType) for k in data.keys()))
             all_values = await asyncio.gather(
-                cls.deserialize(client, v, ValType) for v in data.values())
+                *(cls.deserialize(client, v, ValType) for v in data.values()))
 
             return dict(zip(all_keys, all_values))
 
@@ -231,12 +242,12 @@ class JsonDb(metaclass=SingletonMeta):
             ElemType = args[0]
 
             all_values = await asyncio.gather(
-                cls.deserialize(client, e, ElemType) for e in data)
+                *(cls.deserialize(client, e, ElemType) for e in data))
             return list(all_values)
 
         if issubclass(TargetType, JsonSerializable):
-            return TargetType(await cls.parse_with_manifest(
-                client, data, TargetType.json_manifest()))
+            return TargetType(**await cls.deserialize_with_manifest(
+                client, data, TargetType.MANIFEST))
 
         if TargetType in cls._deserializers.keys():
             # TODO: when serializers return lists or dicts,
@@ -244,20 +255,23 @@ class JsonDb(metaclass=SingletonMeta):
             # not necessary if type converter only messes w primitives
             if type(data) in [list, dict]:
                 raise NotImplementedError("deserializing from list/dict")
-            return await cls._deserializers[TargetType](client, data)
+            deserializer: cls.Deserializer = cls._deserializers[TargetType]
+            check_type(data, deserializer.source)
+            return await deserializer.f(client, data)
 
-        raise NotImplementedError(f"no way to deserialize {typename(target)}")
+        raise NotImplementedError(
+            f"no way to deserialize {typename(type(target))}")
 
     # utilizing deserialize, parses a dict according to an according manifest.
     # this is essentially a special case of deserialize
     @classmethod
-    async def parse_with_manifest(cls,
-                                  client: disnake.Client,
-                                  data: dict,
-                                  manifest: dict):
+    async def deserialize_with_manifest(cls,
+                                        client: disnake.Client,
+                                        data: dict,
+                                        manifest: dict):
         # check for orphans in JSON
         required_keys = set(
-            k for (k, v) in manifest.keys() if not is_optional(v))
+            k for (k, v) in manifest.items() if not is_optional(v))
         unused_keys = set(data.keys()) - set(manifest.keys())
         if unused_keys:
             print(f"Warning, some keys in JSON are unused: {unused_keys}")
@@ -271,12 +285,17 @@ class JsonDb(metaclass=SingletonMeta):
             raise ValueError(
                 f"Required keys are unimplemented: {unimplemented_keys}")
 
+        # we technically get this order guaranteed to us in newer versions
+        # of python--i'm still wary regardless
+        manifest_keys = list(manifest.keys())
+
         # parse child values
         parsed_vals = await asyncio.gather(
-            cls.deserialize(client, data[k], manifest[k]) for k in data)
+            *(cls.deserialize(
+                client, data.get(k), manifest[k]) for k in manifest_keys))
 
         # parse
-        parsed_data = dict(zip(data.keys(), parsed_vals))
+        parsed_data = dict(zip(manifest_keys, parsed_vals))
         parsed_data = {k: v for (k, v) in parsed_data.items() if v is not None}
 
         # check again for required keys that aren't implemented
@@ -305,7 +324,7 @@ class JsonDb(metaclass=SingletonMeta):
     def serializer(cls, f):
         # get type
         sig = signature(f)
-        source = list(sig.parameters.values())[1]
+        source = list(sig.parameters.values())[0].annotation
         cls._serializers[source] = f
         return f
 
@@ -321,7 +340,7 @@ class JsonDb(metaclass=SingletonMeta):
                 raise ManifestError(f"Unknown type: {typename(target)}")
             target = ty[0]
 
-        source = list(sig.parameters.values())[1]
+        source = list(sig.parameters.values())[1].annotation
 
         cls._deserializers[target] = cls.Deserializer(
             source=source,
@@ -329,12 +348,94 @@ class JsonDb(metaclass=SingletonMeta):
             f=f)
         return f
 
-class Secret(JsonDb):
+class Secrets(JsonDb):
     pass
 class State(JsonDb):
     pass
 
+
 # Serializers
-# @JsonDb.deserializer(disnake.Message)
+# @JsonDb.deserializer
 # async def deserialize(client: disnake.Client, data: str) -> disnake.Message:
 #     # pass
+#
+# def serialize(obj: disnake.Message) -> str
+
+# disnake.User
+@JsonDb.deserializer
+async def deserialize(client: disnake.Client, user_id: int) -> disnake.User:
+    return client.get_user(user_id) or await client.fetch_user(user_id)
+
+
+@JsonDb.serializer
+def serialize(user: disnake.User) -> int:
+    return user.id
+
+
+# disnake.TextChannel
+@JsonDb.deserializer
+async def deserialize(client: disnake.Client, chan: str) -> \
+        disnake.TextChannel:
+    guild_id, channel_id = [int(x, 10) for x in chan.split("|")]
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return None
+    try:
+        return guild.get_channel(channel_id) or \
+            await guild.fetch_channel(channel_id)
+    except (disnake.NotFound, disnake.Forbidden):
+        return None
+
+
+@JsonDb.serializer
+def serialize(chan: disnake.TextChannel) -> str:
+    return f"{chan.guild.id}|{chan.id}"
+
+
+# disnake.Role
+@JsonDb.deserializer
+async def deserialize(client: disnake.Client, role: str) -> disnake.Role:
+    guild_id, role_id = [int(x, 10) for x in role.split("|")]
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return None
+    return guild.get_role(role_id) or \
+        disnake.utils.get(await guild.fetch_roles(), id=role_id)
+
+
+@JsonDb.serializer
+def serialize(role: disnake.Role) -> str:
+    return f"{role.guild.id}|{role.id}"
+
+
+# disnake.Message
+@JsonDb.deserializer
+async def deserialize(client: disnake.Client, msg: str) -> \
+        disnake.Message:
+    guild_id, channel_id, msg_id = [int(x, 10) for x in msg.split("|")]
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return None
+    try:
+        channel = guild.get_channel(channel_id) or \
+            await guild.fetch_channel(channel_id)
+        return await channel.fetch_message(msg_id)
+    except (disnake.NotFound, disnake.Forbidden):
+        return None
+
+
+@JsonDb.serializer
+def serialize(msg: disnake.Message) -> str:
+    return f"{msg.guild.id}|{msg.channel.id}|{msg.id}"
+
+
+# datetime.datetime
+@JsonDb.deserializer
+async def deserialize(_, dt: int) -> datetime:
+    return datetime.fromtimestamp(dt, UTC)
+
+
+@JsonDb.serializer
+def serialize(dt: datetime) -> int:
+    return int(dt.timestamp())
+

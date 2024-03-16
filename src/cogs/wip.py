@@ -74,7 +74,7 @@ class WipCog(commands.Cog):
 
         if user is None:
             await inter.author.remove_roles(wip.role)
-            await inter.send(embeds.success(
+            await inter.send(embed=embeds.success(
                 "You have been removed from this WIP."))
             return
 
@@ -130,16 +130,17 @@ class WipCog(commands.Cog):
             else wip.credit.producers
 
         if user in credit_list:
-            await credit_list.remove(user)
+            credit_list.remove(user)
+            await wip.update_pinned()
             response = f"{user.mention} removed as a {credit_type}."
             if user == inter.author:
                 response = f"You have been removed as a {credit_type}."
         else:
-            await credit_list.add(user)
+            credit_list.append(user)
+            await wip.update_pinned()
             response = f"{user.mention} added as a {credit_type}."
             if user == inter.author:
                 response = f"You have been added as a {credit_type}."
-            print(credit_list._members)
 
         await inter.followup.send(ephemeral=True,
                                   embed=embeds.success(response))
