@@ -89,6 +89,6 @@ async def soundcloud_test():
     pass
 
 if __name__ == "__main__":
-    # main()
-    import asyncio
-    asyncio.run(soundcloud_test())
+    main()
+    # import asyncio
+    # asyncio.run(soundcloud_test())

@@ -75,7 +75,7 @@ class WipCog(commands.Cog):
         if user is None:
             await inter.author.remove_roles(wip.role)
             await inter.send(embed=embeds.success(
-                "You have been removed from this WIP."))
+                "You have been removed from this WIP."), ephemeral=True)
             return
 
         if wip.role not in user.roles:

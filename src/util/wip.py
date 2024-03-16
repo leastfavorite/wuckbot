@@ -202,6 +202,36 @@ class Wip(JsonSerializable):
         State().save()
         return wip
 
+    def view_embed(self):
+        embed = disnake.Embed(
+            color=disnake.Color.blue(),
+            title=f"{self.name} ({self.progress}%)",
+            timestamp=self.work_timestamp
+        )
+        embed.set_footer(
+            text="Last update",
+            icon_url=WUCK
+        )
+
+        vocalists = "nobody"
+        producers = "nobody"
+        if self.credit.vocalists:
+            vocalists = "\n".join(
+                map(lambda a: f"<@{a.id}>", self.credit.vocalists))
+        if self.credit.producers:
+            producers = "\n".join(
+                map(lambda a: f"<@{a.id}>", self.credit.producers))
+
+        embed.add_field(name="featuring:", value=vocalists, inline=False)
+        embed.add_field(name="produced by:", value=producers, inline=False)
+
+        # TODO
+        # - link to most recent update
+        # - link to soundcloud
+        # (maybe with buttons?)
+
+        return embed
+
     async def update_pinned(self):
         embed = disnake.Embed(
             color=disnake.Color.blue(),

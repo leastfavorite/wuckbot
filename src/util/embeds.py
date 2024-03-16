@@ -14,7 +14,7 @@ def error(msg: str):
     return embed
 
 
-def success(msg: str):
+def success(msg: str = ""):
     embed = disnake.Embed(
         color=disnake.Color.green(),
         title="Success",

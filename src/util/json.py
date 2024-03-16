@@ -464,7 +464,7 @@ def serialize(msg: disnake.Message) -> str:
 
 # datetime.datetime
 @JsonDb.deserializer
-async def deserialize(dt: int) -> datetime:
+async def deserialize(dt: int, **_) -> datetime:
     return datetime.fromtimestamp(dt, UTC)
 
 
