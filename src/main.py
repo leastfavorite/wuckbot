@@ -5,7 +5,6 @@ import json
 import importlib
 from inspect import isclass
 from util.json import Secrets, State
-from util.soundcloud import SoundcloudClient
 
 SECRETS_FILENAME = "secrets.json"
 STATE_FILENAME = "state.json"
@@ -32,10 +31,6 @@ def main():
     # wait for ready to do async stuff--that way we still get to use
     # bot.run
     async def _on_ready():
-        sc = SoundcloudClient()
-        await sc.get_client_id()
-        await sc.close()
-        return
 
         cogs = []
         state_manifest = {}
@@ -55,8 +50,8 @@ def main():
                 getattr(ext_module, "SECRETS_MANIFEST", {}))
 
         # load json
-        await State.create(bot, STATE_FILENAME, state_manifest)
-        await Secrets.create(bot, SECRETS_FILENAME, secrets_manifest)
+        await State.create(STATE_FILENAME, state_manifest, bot=bot)
+        await Secrets.create(SECRETS_FILENAME, secrets_manifest, bot=bot)
 
         # load cogs
         for cog in cogs:
@@ -75,5 +70,25 @@ def main():
     bot.run(token=bot_token)
 
 
+async def soundcloud_test():
+    with open(SECRETS_FILENAME, "r") as fp:
+        secrets = json.load(fp)
+        oauth = secrets["soundcloud_oauth"]
+
+    from util import soundcloud
+    session = await soundcloud.Session.create(oauth)
+    # url = "https://cdn.discordapp.com/attachments/1214299973374713919/121534" \
+    #     "5389826220083/walter_white_scream.wav?ex=6605a418&is=65f32f18&hm=02" \
+    #     "d0c1b6d11fd803f893353abcad1386569bba8e6525367986934a3546ff49b9&"
+    # json_ = await session.upload_track(url, title="fortnite song", description="heyyyy :p", tags="fortnitecore")
+    # print(json.dumps(json_, indent=2))
+    url = "https://soundcloud.com/least_favorite/fortnite-song-7/s-DvZspJB94eR"
+    track = await session.fetch_track(url)
+    await track.edit(title="cool awesome song 12")
+    await session.close()
+    pass
+
 if __name__ == "__main__":
-    main()
+    # main()
+    import asyncio
+    asyncio.run(soundcloud_test())

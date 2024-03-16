@@ -91,6 +91,35 @@ class JsonSerializable:
         new_dict = self.validate_dict(kwargs, self.MANIFEST)
         self.__dict__.update(new_dict)
 
+    @classmethod
+    async def create(cls, **kwargs):
+        ret = cls(**kwargs)
+
+        if hasattr(ret, "on_init"):
+            remaining_kwargs = \
+                {k: v for (k, v) in kwargs.items() if k not in cls.MANIFEST}
+            await ret.on_init(**remaining_kwargs)
+
+        return ret
+
+    def __eq__(self, other):
+        if type(other) is not type(self):
+            return False
+
+        for item in self.MANIFEST:
+            if getattr(self, item, None) != getattr(other, item, None):
+                return False
+
+        return True
+
+    def __hash__(self):
+        return hash([getattr(self, x, None) for x in self.MANIFEST])
+
+    def __repr__(self):
+        classname = type(self).__qualname__
+        entries = ", ".join(f"{i}={getattr(self,i)}" for i in self.MANIFEST)
+        return f"{classname}({entries})"
+
 
 class SingletonMeta(type):
     _instances = {}
@@ -126,9 +155,9 @@ class JsonDb(metaclass=SingletonMeta):
 
     @classmethod
     async def create(cls,
-                     client: disnake.Client,
                      filename: str,
-                     manifest: dict):
+                     manifest: dict,
+                     **kwargs):
         try:
             with open(filename, "r") as fp:
                 data = json.load(fp)
@@ -136,7 +165,7 @@ class JsonDb(metaclass=SingletonMeta):
             print(f"{filename} doesn't exist, using default...")
             data = {}
 
-        parsed = await cls.deserialize_with_manifest(client, data, manifest)
+        parsed = await cls.deserialize_with_manifest(data, manifest, **kwargs)
         ret = cls(parsed, filename)
 
         @tasks.loop(minutes=60)
@@ -196,14 +225,14 @@ class JsonDb(metaclass=SingletonMeta):
     # and tries to convert that dict to that manifest's specification.
     @classmethod
     async def deserialize(cls,
-                          client: disnake.Client,
                           data,
-                          target):
+                          target,
+                          **kwargs):
         if data is None:
             return None
 
         if type(target) is dict:
-            return await cls.deserialize_with_manifest(client, data, target)
+            return await cls.deserialize_with_manifest(data, target, **kwargs)
 
         if is_optional(target):
             ty = list(filter(
@@ -229,9 +258,11 @@ class JsonDb(metaclass=SingletonMeta):
             ValType = args[1]
 
             all_keys = await asyncio.gather(
-                *(cls.deserialize(client, k, KeyType) for k in data.keys()))
+                *(cls.deserialize(k, KeyType, **kwargs)
+                  for k in data.keys()))
             all_values = await asyncio.gather(
-                *(cls.deserialize(client, v, ValType) for v in data.values()))
+                *(cls.deserialize(v, ValType, **kwargs)
+                  for v in data.values()))
 
             return dict(zip(all_keys, all_values))
 
@@ -242,12 +273,14 @@ class JsonDb(metaclass=SingletonMeta):
             ElemType = args[0]
 
             all_values = await asyncio.gather(
-                *(cls.deserialize(client, e, ElemType) for e in data))
+                *(cls.deserialize(e, ElemType, **kwargs) for e in data))
             return list(all_values)
 
         if issubclass(TargetType, JsonSerializable):
-            return TargetType(**await cls.deserialize_with_manifest(
-                client, data, TargetType.MANIFEST))
+            return await TargetType.create(
+                **kwargs,
+                **await cls.deserialize_with_manifest(
+                    data, TargetType.MANIFEST, **kwargs))
 
         if TargetType in cls._deserializers.keys():
             # TODO: when serializers return lists or dicts,
@@ -257,7 +290,7 @@ class JsonDb(metaclass=SingletonMeta):
                 raise NotImplementedError("deserializing from list/dict")
             deserializer: cls.Deserializer = cls._deserializers[TargetType]
             check_type(data, deserializer.source)
-            return await deserializer.f(client, data)
+            return await deserializer.f(data, **kwargs)
 
         raise NotImplementedError(
             f"no way to deserialize {typename(type(target))}")
@@ -266,9 +299,9 @@ class JsonDb(metaclass=SingletonMeta):
     # this is essentially a special case of deserialize
     @classmethod
     async def deserialize_with_manifest(cls,
-                                        client: disnake.Client,
                                         data: dict,
-                                        manifest: dict):
+                                        manifest: dict,
+                                        **kwargs):
         # check for orphans in JSON
         required_keys = set(
             k for (k, v) in manifest.items() if not is_optional(v))
@@ -291,8 +324,8 @@ class JsonDb(metaclass=SingletonMeta):
 
         # parse child values
         parsed_vals = await asyncio.gather(
-            *(cls.deserialize(
-                client, data.get(k), manifest[k]) for k in manifest_keys))
+            *(cls.deserialize(data.get(k), manifest[k], **kwargs)
+              for k in manifest_keys))
 
         # parse
         parsed_data = dict(zip(manifest_keys, parsed_vals))
@@ -340,7 +373,7 @@ class JsonDb(metaclass=SingletonMeta):
                 raise ManifestError(f"Unknown type: {typename(target)}")
             target = ty[0]
 
-        source = list(sig.parameters.values())[1].annotation
+        source = list(sig.parameters.values())[0].annotation
 
         cls._deserializers[target] = cls.Deserializer(
             source=source,
@@ -363,8 +396,8 @@ class State(JsonDb):
 
 # disnake.User
 @JsonDb.deserializer
-async def deserialize(client: disnake.Client, user_id: int) -> disnake.User:
-    return client.get_user(user_id) or await client.fetch_user(user_id)
+async def deserialize(id_: int, /, bot: disnake.Client, **_) -> disnake.User:
+    return bot.get_user(id_) or await bot.fetch_user(id_)
 
 
 @JsonDb.serializer
@@ -374,10 +407,10 @@ def serialize(user: disnake.User) -> int:
 
 # disnake.TextChannel
 @JsonDb.deserializer
-async def deserialize(client: disnake.Client, chan: str) -> \
+async def deserialize(chan: str, /, bot: disnake.Client, **_) -> \
         disnake.TextChannel:
     guild_id, channel_id = [int(x, 10) for x in chan.split("|")]
-    guild = client.get_guild(guild_id)
+    guild = bot.get_guild(guild_id)
     if guild is None:
         return None
     try:
@@ -394,9 +427,9 @@ def serialize(chan: disnake.TextChannel) -> str:
 
 # disnake.Role
 @JsonDb.deserializer
-async def deserialize(client: disnake.Client, role: str) -> disnake.Role:
+async def deserialize(role: str, /, bot: disnake.Client, **_) -> disnake.Role:
     guild_id, role_id = [int(x, 10) for x in role.split("|")]
-    guild = client.get_guild(guild_id)
+    guild = bot.get_guild(guild_id)
     if guild is None:
         return None
     return guild.get_role(role_id) or \
@@ -410,10 +443,10 @@ def serialize(role: disnake.Role) -> str:
 
 # disnake.Message
 @JsonDb.deserializer
-async def deserialize(client: disnake.Client, msg: str) -> \
+async def deserialize(msg: str, /, bot: disnake.Client, **_) -> \
         disnake.Message:
     guild_id, channel_id, msg_id = [int(x, 10) for x in msg.split("|")]
-    guild = client.get_guild(guild_id)
+    guild = bot.get_guild(guild_id)
     if guild is None:
         return None
     try:
@@ -431,7 +464,7 @@ def serialize(msg: disnake.Message) -> str:
 
 # datetime.datetime
 @JsonDb.deserializer
-async def deserialize(_, dt: int) -> datetime:
+async def deserialize(dt: int) -> datetime:
     return datetime.fromtimestamp(dt, UTC)
 
 
