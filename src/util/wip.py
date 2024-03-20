@@ -11,6 +11,14 @@ class SoundcloudTrack:
     pass
 
 
+class Update(JsonSerializable):
+    MANIFEST = {
+        "file": disnake.Message,
+        "update": Optional[disnake.Message],
+        "timestamp": datetime
+    }
+
+
 class Wip(JsonSerializable):
     # assuming we know how to serialize SoundcloudTrack, TextChannel, etc.
     # this class can now be initialized into smart, fancy datatypes from JSON
@@ -25,11 +33,9 @@ class Wip(JsonSerializable):
             "producers": list[disnake.Member],
             "vocalists": list[disnake.Member]
         },
-        "messages": {
-            "pinned": Optional[disnake.Message],
-            "last_update": Optional[disnake.Message]
-        },
-        "work_timestamp": datetime
+        "pinned": Optional[disnake.Message],
+        "updates": list[Update],
+        "created_timestamp": datetime
     }
 
     @staticmethod
@@ -128,7 +134,6 @@ class Wip(JsonSerializable):
             if disnake.utils.get(State().wips, channel=existing_channel):
                 raise UserError("This channel is already a WIP.")
 
-        # TODO: ideally these could be found at init?
         # get WIPs category
         wips_category = disnake.utils.get(guild.categories, name="WIPs")
         if wips_category is None:
@@ -185,6 +190,7 @@ class Wip(JsonSerializable):
                   soundcloud=soundcloud,
                   channel=channel,
                   role=new_role,
+                  updates=[],
                   credit={
                       "producers": [],
                       "vocalists": []
@@ -193,7 +199,7 @@ class Wip(JsonSerializable):
                       "pinned": None,
                       "last_update": None
                   },
-                  work_timestamp=disnake.utils.utcnow())
+                  created_timestamp=disnake.utils.utcnow())
 
         # send the pinned message
         await wip.update_pinned()
@@ -203,10 +209,14 @@ class Wip(JsonSerializable):
         return wip
 
     def view_embed(self):
+        timestamp = self.created_timestamp
+        if len(self.updates) > 0:
+            timestamp = self.updates[-1].timestamp
+
         embed = disnake.Embed(
             color=disnake.Color.blue(),
             title=f"{self.name} ({self.progress}%)",
-            timestamp=self.work_timestamp
+            timestamp=timestamp
         )
         embed.set_footer(
             text="Last update",
@@ -233,10 +243,14 @@ class Wip(JsonSerializable):
         return embed
 
     async def update_pinned(self):
+        timestamp = self.created_timestamp
+        if len(self.updates) > 0:
+            timestamp = self.updates[-1].timestamp
+
         embed = disnake.Embed(
             color=disnake.Color.blue(),
             title=f"\N{PUSHPIN} {self.name} ({self.progress}%)",
-            timestamp=self.work_timestamp
+            timestamp=timestamp
         )
         embed.set_footer(
             text="Last update",
@@ -259,19 +273,17 @@ class Wip(JsonSerializable):
         # - link to most recent update
         # - link to soundcloud
         # (maybe with buttons?)
-        if self.messages.pinned is None:
-            self.messages.pinned = await self.channel.send(embed=embed)
+        if self.pinned is None:
+            self.pinned = await self.channel.send(embed=embed)
         else:
-            await self.messages.pinned.edit(embed=embed)
+            await self.pinned.edit(embed=embed)
 
-        if not self.messages.pinned.pinned:
-            await self.messages.pinned.pin()
+        if not self.pinned.pinned:
+            await self.pinned.pin()
 
     async def edit(self, *,
                    name: Optional[str] = None,
-                   progress: Optional[Union[str, int]] = None,
-                   last_update: Optional[disnake.Message] = None,
-                   work_timestamp: Optional[datetime] = None):
+                   progress: Optional[Union[str, int]] = None):
 
         if name is not None:
             # check for name collision
@@ -284,8 +296,6 @@ class Wip(JsonSerializable):
 
         self.name = name or self.name
         self.progress = progress or self.progress
-        self.messages.last_update = last_update or self.messages.last_update
-        self.work_timestamp = work_timestamp or self.work_timestamp
 
         if name is not None or progress is not None:
             await self.channel.edit(

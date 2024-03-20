@@ -173,6 +173,7 @@ class JsonDb(metaclass=SingletonMeta):
             ret.save()
 
     def save(self):
+        # TODO backups
         with open(self.filename, "w") as fp:
             json.dump(self.serialize(self.data), fp, indent=2)
 
@@ -380,6 +381,8 @@ class JsonDb(metaclass=SingletonMeta):
             target=target,
             f=f)
         return f
+
+    # TODO: some signature magic can get rid of these **_s
 
 class Secrets(JsonDb):
     pass

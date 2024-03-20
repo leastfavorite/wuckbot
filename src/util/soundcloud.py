@@ -1,380 +1,364 @@
-# i am going to use regex to parse HTML :)
-# yayyyy....
-import re
-import aiohttp
+from typing import Union, Optional, Callable
+from dataclasses import dataclass
 import asyncio
-from typing import Optional
+import aiohttp
+import re
 from urllib.parse import urlparse
+from util.json import JsonDb
 
-from util.json import JsonSerializable
-
-
-class Http:
-    API = "https://api-v2.soundcloud.com/"
-
-    def __init__(self, oauth_token):
-        self.session: aiohttp.ClientSession = aiohttp.ClientSession()
-        self.client_id = None
-        self.oauth_token = oauth_token
-
-    async def close(self):
-        await self.session.close()
-
-    @property
-    def req_kwargs(self):
-        return {
-        }
-
-    async def refresh_client_id(self):
-        async with self.session.get("https://soundcloud.com/") as resp:
-
-            if resp.status != 200:
-                return None
-
-            urls = []
-            async for line in resp.content:
-                # find cdn js files
-                match = re.search(
-                    r'src="(https://a-v2.sndcdn.com/assets/.*\.js)',
-                    line.decode("utf8"))
-                if match is not None:
-                    urls.append(match.group(1))
-
-            # finds a client id from javascript.
-            # uses some really ugly scrape-y regex
-            async def _find_client_id(url):
-                async with self.session.get(url) as inner_resp:
-                    if inner_resp.status != 200:
-                        return None
-                    content = await inner_resp.content.read()
-                    content = content.decode("utf8")
-                    match = re.search(r'"client_id=(\w+)"', content)
-                    if match is not None:
-                        return match.group(1)
-                    else:
-                        match = re.search(r'client_id:"(\w+)"', content)
-                        if match is not None:
-                            return match.group(1)
-
-            ids = await asyncio.gather(*(_find_client_id(url) for url in urls))
-            ids = [id_ for id_ in ids if id_ is not None]
-            if len(ids) == 0:
-                raise RuntimeError("Could not find client_id")
-            if any(id_ != ids[0] for id_ in ids):
-                raise RuntimeError("Got false-positive client ids? Uh oh")
-            self.client_id = ids[0]
-
-    async def api_call(self, verb, url,
-                       headers={}, params={},
-                       as_json=True, retry=True,
-                       **kwargs):
-        if self.client_id is None:
-            await self.refresh_client_id()
-
-        default_headers = {
-            "Accept": "application/json",
-            "Authorization": f"OAuth {self.oauth_token}"
-        }
-        default_params = {
-            "client_id": self.client_id
-        }
-        kwargs["headers"] = {**default_headers, **headers}
-        kwargs["params"] = {**default_params, **params}
-
-        url = self.API + url
-
-        async with getattr(self.session, verb)(url, **kwargs) as resp:
-            if not retry:
-                # error out if we fail here and don't want to retry
-                resp.raise_for_status()
-
-            if resp.ok:
-                if as_json:
-                    return await resp.json()
-                else:
-                    return await resp.read()
-
-        # if we fail with retry, reparse stale parameters
-        await self.refresh_client_id()
-
-        # try again
-        async with getattr(self.session, verb)(url, **kwargs) as resp:
-            resp.raise_for_status()
-            if as_json:
-                return await resp.json()
-            else:
-                return await resp.read()
-
-    async def post(self, *args, **kwargs):
-        return await self.api_call("post", *args, **kwargs)
-
-    async def get(self, *args, **kwargs):
-        return await self.api_call("get", *args, **kwargs)
-
-    async def upload_track(self, song_url, *, title,
-                           description="", tags="", pro=False):
-
-        # get "filename" from parsing the song url
-        filename = urlparse(song_url).path.split("/")[-1]
-        print(filename)
-
-        # request the url to get its content length (and later its data)
-        async with self.session.get(song_url) as song_resp:
-            song_resp.raise_for_status()
-
-            # get the length
-            length = int(song_resp.headers["Content-Length"])
-
-            # post the track upload policy.
-            # this gives an aws link to PUT to to upload the song
-            policy = await self.post("uploads/track-upload-policy",
-                                     json={
-                                         "filename": filename,
-                                         "filesize": length
-                                     })
-            uid = policy["uid"]
-
-            async with self.session.put(
-                policy["url"],
-                headers=policy["headers"],
-                data=song_resp.content
-            ) as bucket_resp:
-                bucket_resp.raise_for_status()
-
-        # then, queue transcoding:
-        await self.post(f"uploads/{uid}/track-transcoding", data=b'')
-
-        # song is uploaded. we can now put the metadata in.
-        # first, we find a slug:
-        slug_base = title.lower().replace(" ", "-")
-
-        # filter out invalid characters
-        slug_base = "".join(
-            filter(lambda x: re.search(r'[a-z0-9_-]', x), slug_base))
-
-        for i in range(10):
-            # try slug_base, then slug_base-1, slug_base-2...
-            slug = f"{slug_base}-{i}" if i > 0 else slug_base
-
-            # call tp availability and extract tp available from the response
-            slug_available = (await self.get(
-                "track_permalink_availability",
-                params={"permalink": slug}
-            )).get("track_permalink_available", False)
-
-            if slug_available:
-                break
-        else:
-            raise ValueError("Somehow this slug has been uploaded 10 times")
-
-        # now, finally, we can upload:
-        form = self.track_form(
-            title=title,
-            slug=slug,
-            description=description,
-            tags=tags,
-            filename=filename,
-            uid=uid)
-
-        return await self.post("tracks", json=form)
-
-    async def edit_track(self, s_id: int,
-                         title: str = None,
-                         description: str = None,
-                         tags: str = None,
-                         pro: bool = False):
-        track_info = await self.get(
-            f"tracks/soundcloud:tracks:{s_id}")
-
-        form = self.track_form(
-            title=title or track_info["title"],
-            slug=track_info["permalink"],
-            description=description or track_info["description"],
-            tags=tags or track_info["tag_list"],
-            pro=pro
-        )
-
-        track_info = await self.api_call(
-            "put",
-            f"tracks/soundcloud:tracks:{s_id}",
-            json=form)
-
-        return track_info
+MONETIZATION = {
+    "start_timestamp": None,
+    "start_timezone": None,
+    "end_timestamp": None,
+    "end_timezone": None,
+    "territories": [],
+    "excluded_territories": [],
+    "worldwide": False
+}
 
 
-    def track_form(self, title: str, slug: str,
-                   description: str = "", tags: str = "",
-                   filename: str = None, uid: str = None,
-                   pro: bool = False):
-        ret = {
-            "track": {
-                # "api_streamable": True,
-                # "commentable": True,
-                "description": description,
-                "downloadable": True,
-                # "embeddable": True,
-                # "feedable": False,
-                # "genre": "",
-                # "isrc_generate": False,
-                # "license": "all-rights-reserved",
-                "permalink": slug,
-                # "reveal_comments": True,
-                # "reveal_stats": True,
-                "sharing": "private",
-                "tag_list": tags,
-                "title": title,
-                # "geo_blockings": [],
-                # "snippet_presets": {"start_seconds": 0, "end_seconds": 3},  # e
-                # "publisher_metadata": {
-                #     "artist": None,
-                #     "album_title": None,
-                #     "contains_music": True,  # present in edit
-                #     "publisher": None,
-                #     "iswc": None,
-                #     "upc_or_ean": None,
-                #     "isrc": None,  # present in edit
-                #     "p_line": None,
-                #     "c_line": None,
-                #     "explicit": None,
-                #     "writer_composer": None,
-                #     "release_title": None
-                # },
-                # "restrictions": [],
-                # "rightsholders": [],
-                # "caption": "", # shows in create, not in edit
-                # "tracklist": {
-                #     "segments": []
-                # },
-                # "track_format": "single-track",
-                # "scheduled_public_date": None,
-                # "scheduled_timezone": None
-            }
-        }
-        if filename is not None:
-            ret["track"]["original_filename"] = filename
-        if uid is not None:
-            ret["track"]["uid"] = uid
-
-        if pro:
-            ret["track"]["monetization"] = {
-                "start_timestamp": None,
-                "start_timezone": None,
-                "end_timestamp": None,
-                "end_timezone": None,
-                "territories": [],
-                "excluded_territories": [],
-                "worldwide": False
-            }
-
-        return ret
-
-
-
-class Playlist:
+class SoundCloud:
     pass
 
 
-class Track:
-    pass
+class ScObject:
+    def __init__(self, sc: SoundCloud, *,
+                 id: int, permalink_url: str, permalink: str, **_):
+        self.sc = sc
+        self.s_id = id
+        self.url = permalink_url
+        self.permalink = permalink
 
+    def update(self, **kwargs):
+        self.__init__(self.sc, **kwargs)
 
-class Session:
-    def __init__(self, http: Http, slug: str, pro: bool):
-        self._http = http
-        self.slug = slug
-        self.pro = pro
+    def __eq__(self, o):
+        return hasattr(o, "s_id") and self.s_id == o.s_id
 
-    async def close(self):
-        await self._http.close()
-
-    @classmethod
-    async def create(cls, oauth_token: str):
-        http = Http(oauth_token)
-        me = await http.get("me")
-
-        slug = me["permalink"]
-        pro = me["badges"]["pro"] or me["badges"]["pro_unlimited"]
-
-        return cls(http, slug, pro)
-
-    async def upload_track(self, url: str, *, title: str,
-                           description: str = "", tags: str = "") -> Track:
-        resp = await self._http.upload_track(
-            url, title=title, description=description, tags=tags,
-            pro=self.pro)
-
-        return await Track.create(s_id=resp["id"], sc=self)
-
-    async def fetch_track(self, url: str) -> Optional[Track]:
-        async with self._http.session.get(url) as resp:
-            async for line in resp.content:
-                pattern = r'<link rel="alternate" href="ios-app://.+:(\d+)">'
-                match = re.search(pattern, line.decode().strip())
-                if match:
-                    s_id = int(match.group(1))
-                    return await Track.create(s_id=s_id, sc=self)
-
-    async def fetch_playlist(self, url: str) -> Optional[Playlist]:
-        pass
-
-
-class Track(JsonSerializable):
-    MANIFEST = {
-        "s_id": int
-    }
-
-    async def on_init(self, sc: Session, **_):
-        self._session = sc
-        track_info = await sc._http.get(
-            f"tracks/soundcloud:tracks:{self.s_id}")
-        self.title = track_info["title"],
-        self.url = track_info["permalink_url"]
+    def __hash__(self):
+        return self.s_id
 
     def __repr__(self):
-        return f"Track<{self.title}>"
+        if hasattr(self, "title"):
+            return f"{type(self).__qualname__}({self.title})"
+        elif hasattr(self, "username"):
+            return f"{type(self).__qualname__}({self.username})"
+        return type(self).__qualname__
 
+
+class TrackOrPlaylist(ScObject):
+    def __init__(self, *args,
+                 title: str, description: str, artwork_url: str,
+                 secret_token: Optional[str],
+                 user: dict, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.title = title
+        self.description = description
+        self.artwork_url = artwork_url
+        self.secret_token = secret_token
+        self.author = User(**user)
+
+    @property
+    def private(self):
+        return self.secret_token is not None
+
+
+class Track(TrackOrPlaylist):
     async def edit(self,
                    title: str = None,
                    description: str = None,
                    tags: str = None):
-        resp = await self._session._http.edit_track(
-            s_id=self.s_id,
-            title=title,
-            description=description,
-            tags=tags,
-            pro=self._session.pro
-        )
-
-        self.title = resp["title"]
-        self.url = resp["permalink_url"]
+        pass
 
     async def delete(self):
-        await self._session._http.api_call(
-            "delete", f"tracks/soundcloud:tracks:{self.s_id}")
+        pass
+
+    async def update_artwork(self, artwork_url: str):
+        pass
 
 
-class Playlist(JsonSerializable):
-    MANIFEST = {
-        "s_id": int
-    }
+class Playlist(TrackOrPlaylist):
+    def __init__(self, *args, tracks: list[dict], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tracks = [Track(**track) for track in tracks]
 
-    async def on_init(self, sc: Session, **_):
-        # get songs
-        self.songs: list[Track] = []  # TODO
-        self._session = sc
+    async def add_track(self, track: Track):
+        pass
+
+    async def remove_track(self, track: Track):
+        pass
+
+    async def delete(self):
+        pass
+
+
+class User(ScObject):
+    def __init__(self, *args, avatar_url: str, username: str,
+                 creator_subscription: dict, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.avatar_url = avatar_url
+        self.username = username
+        self.pro = creator_subscription["product"]["id"] != "free"
+        # TODO (possibly): check if we're following
+
+
+NotRequired = object()
+Required = object()
+
+
+@dataclass
+class Route:
+    sc: SoundCloud
+    verb: str
+    endpoint: str
+    params: dict[str, str] = None
+    json: list[str] = None
+    parse: Callable = None
+
+    # coroutine or callable
+
+    BASE_URL = "https://api-v2.soundcloud.com"
 
     @classmethod
-    async def from_url(cls, url: str):
+    def _parse_args(cls, arg_dict, **kwargs):
+        out = {}
+
+        if type(arg_dict) is list:
+            arg_dict = {k: Required for k in arg_dict}
+
+        for k, v in arg_dict.items():
+
+            if v is Required:
+                if k in kwargs:
+                    out[k] = kwargs[k]
+                else:
+                    raise KeyError(f"Could not find {k}")
+                continue
+
+            if v is NotRequired:
+                if k in kwargs and kwargs[k] is not None:
+                    out[k] = kwargs[k]
+                continue
+
+            if type(v) is dict:
+                out[k] = cls._parse_args(v, **kwargs)
+            if type(v) is str:
+                out[k] = v.format(**kwargs)
+            else:
+                out[k] = v
+
+        return out
+
+    async def run(self, retry=True, **kwargs):
+        endpoint = self.endpoint.format(**kwargs)
+
+        params = dict(client_id=self.sc.client_id,
+                      **self._parse_args(self.params or {}, **kwargs))
+        json = None
+        if self.json:
+            json = self._parse_args(self.json, **kwargs)
+
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"OAuth {self.sc.oauth_token}"
+        }
+
+        json = {} if json is None else {"json": json}
+        async with self.sc.http.request(self.verb, self.BASE_URL + endpoint,
+                                        params=params, headers=headers,
+                                        **json) as resp:
+            if not resp.ok:
+                if retry:
+                    # maybe something's gone stale?
+                    await self.sc.refresh()
+                    return await self.run(retry=False, **kwargs)
+                else:
+                    resp.raise_for_status()
+                    return None
+
+            result = await resp.json()
+
+        if self.parse:
+            result = self.parse(self, **result)
+            if asyncio.iscoroutine(result):
+                return await result
+        return result
+
+
+class SoundCloud:
+    def __init__(self, oauth_token: str):
+        self.http = aiohttp.ClientSession()
+        self.oauth_token = oauth_token
+        self.client_id = None
+        self.routes = {
+            "resolve": Route(self, "get", "/resolve", params=["url"]),
+
+            "track_upload_policy": Route(
+                self, "post", "/uploads/track-upload-policy",
+                json=["filename", "filesize"]),
+
+            "track_transcoding": Route(
+                self, "post", "/uploads/{uid}/track-transcoding"),
+
+            "track_permalink_availability": Route(
+                self, "post", "/track_permalink_availability",
+                params=["permalink"],
+                parse=lambda _, **x: x.get(
+                    "track_permalink_available", False)),
+
+            "upload_track": Route(self, "post", "/tracks", json={"track": {
+                "description": Required,
+                "downloadable": True,
+                "permalink": Required,
+                "sharing": "private",
+                "tag_list": Required,
+                "title": Required,
+                "original_filename": NotRequired,
+                "uid": NotRequired,
+                "monetization": NotRequired
+            }}, parse=Track),
+
+            "me": Route(self, "get", "/me", parse=User),
+        }
+
+    async def get_client_id(self):
+        ASSET_RE = r'src="(https://a-v2.sndcdn.com/assets/.*\.js)'
+        CLIENT_REGEXES = [r'"client_id=(\w+)"', r'client_id:"(\w+)"']
+
+        async with self.http.get("https://soundcloud.com/") as resp:
+            # find all assets/*.js files
+            regex_gen = (re.search(ASSET_RE, line.decode())
+                         async for line in resp.content)
+            urls = (match.group(1) async for match in regex_gen
+                    if match is not None)
+
+            # try to find a client id in each one
+            async for url in urls:
+                async with self.http.get(url) as inner_resp:
+                    if not inner_resp.ok:
+                        continue
+
+                    content = (await inner_resp.content.read()).decode()
+
+                # hunt for client_id
+                for regex in CLIENT_REGEXES:
+                    if (match := re.search(regex, content)) is not None:
+                        return match.group(1)
+
+        return None
+
+    # try to refresh all the "dynamic" elements of the soundcloud bot that
+    # are needed to run.. the client_id and user account can change without
+    # us knowing, and it might break stuff
+    async def refresh(self):
+        self.client_id = await self.get_client_id()
+        if self.client_id is None:
+            raise RuntimeError("Could not parse out a client id")
+
+        self.me = await self.routes["me"].run()
+
+    @classmethod
+    async def create(cls, oauth_token: str):
+        sc = cls(oauth_token)
+        await sc.refresh()
+        return sc
+
+    async def resolve(self, url: str) -> Union[Track, User, Playlist, None]:
+        resolved = await self.routes["resolve"].run(url=url)
+        kind = resolved["kind"]
+        if kind == "user":
+            return User(self, **resolved)
+        elif kind == "playlist":
+            return Playlist(self, **resolved)
+        elif kind == "track":
+            return Track(self, **resolved)
+        else:
+            return None
+
+    async def find_permalink(self, title: str, tries=10) -> Optional[str]:
+        slug = title.lower().replace(" ", "-")
+        slug = re.sub(r'[^a-z0-9_-]', r'', slug)
+        candidates = [slug, *(f"{slug}-{i}" for i in range(1, tries))]
+
+        for candidate in candidates:
+            if await self.routes["track_permalink_availability"].run(
+                    permalink=candidate):
+                return candidate
+        raise RuntimeError(f"Track {title} has been uploaded {tries} times?")
+
+    async def upload_track(self, file_url: str, *,
+                           title: str,
+                           description: str,
+                           tags: str) -> Optional[Track]:
+        async with self.http.get(file_url) as file_resp:
+            file_resp.raise_for_status()
+
+            filename = urlparse(file_url).path.split("/")[-1]
+            filesize = int(file_resp.headers["Content-Length"])
+
+            # get track policy
+            policy = await self.routes["track_upload_policy"].run(
+                filename=filename, filesize=filesize)
+            uid = policy["uid"]
+
+            # upload track to policy
+            async with self.http.put(policy["url"],
+                                     headers=policy["headers"],
+                                     data=file_resp.content) as policy_resp:
+                policy_resp.raise_for_status()
+
+        # queue track transcoding
+        await self.routes["track_transcoding"].run(uid=uid)
+
+        # find a slug
+        permalink = await self.find_permalink(title)
+
+        # upload!! :D
+        return await self.routes["upload_track"].run(
+            description=description,
+            permalink=permalink,
+            tag_list=tags,
+            title=title,
+            original_filename=filename,
+            uid=uid,
+            monetization=MONETIZATION if self.me.has_pro else None
+        )
+
+    async def fetch_track(self, s_id: int) -> Track:
         pass
 
-    async def add(self, track: Track):
+    async def fetch_playlist(self, s_id: int) -> Playlist:
         pass
 
-    async def remove(self, track: Track):
+    async def fetch_user(self, s_id: int) -> User:
         pass
 
-    async def edit(self, name: str = "", description: str = ""):
-        pass
 
-    def __contains__(self):
-        pass
+@JsonDb.serializer
+def serialize(user: User) -> int:
+    return user.s_id
+
+
+@JsonDb.deserializer
+def deserialize(s_id: int, sc: SoundCloud, **_) -> User:
+    return await sc.fetch_user(s_id)
+
+
+@JsonDb.serializer
+def serialize(playlist: Playlist) -> int:
+    return playlist.s_id
+
+
+@JsonDb.deserializer
+def deserialize(s_id: int, sc: SoundCloud, **_) -> Playlist:
+    return await sc.fetch_playlist(s_id)
+
+
+@JsonDb.serializer
+def serialize(track: Track) -> int:
+    return track.s_id
+
+
+@JsonDb.deserializer
+def deserialize(s_id: int, sc: SoundCloud, **_) -> Track:
+    await sc.fetch_track(s_id)
