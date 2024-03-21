@@ -2,10 +2,9 @@ from disnake.ext import commands
 import disnake
 
 import asyncio
-from typing import Optional
 
 from util.wip import Wip, Update
-from util.decorators import error_handler, UserError
+from util.decorators import UserError
 from util import embeds
 
 from util.json import State
@@ -19,9 +18,11 @@ STATE_MANIFEST = {
 
 
 class UpdateCog(commands.Cog):
-    def __init__(self, bot: commands.InteractionBot, sc: soundcloud.Session):
+    def __init__(self,
+                 bot: commands.InteractionBot, sc: soundcloud.SoundCloud):
         self.bot = bot
         self.sc = sc
+        self.update_lock = asyncio.Lock()
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: disnake.Message):
@@ -63,53 +64,135 @@ class UpdateCog(commands.Cog):
                 not msg.attachments[0].content_type.startswith("audio"):
             return
 
-        # and we haven't updated with this message before
-        if disnake.utils.get(wip.updates, file__id=msg.id):
+        # by someone the webcage role
+        author = await wip.channel.guild.get_or_fetch_member(e.user_id)
+        if disnake.utils.get(author.roles, name="webcage") is None:
             return
 
-        async with wip.channel.typing():
-            # and the reaction isn't removed
-            await asyncio.sleep(3)
-            bells = disnake.utils.get(msg.reactions, emoji=UPDATE_REACTION)
-            if bells.count < 2:
-                # someone hit the reaction and then chickened out
-                return
-
-            # (we get the author here to avoid a race condition afterward)
-            author = await wip.channel.guild.get_or_fetch_member(e.user_id)
+        async with self.update_lock:
 
             # and we haven't updated with this message before
             if disnake.utils.get(wip.updates, file__id=msg.id):
                 return
 
-        await self.create_update(author=author, file_msg=msg, wip=wip)
+            # and they don't un-react within 3 seconds
+            async with wip.channel.typing():
+                await asyncio.sleep(3)
+                bells = disnake.utils.get(msg.reactions, emoji=UPDATE_REACTION)
+                print(bells.count)
+                if bells.count < 2:
+                    return
+
+            # update
+            await self.create_update(author=author, file_msg=msg, wip=wip)
 
     async def create_update(self,
                             author: disnake.Member,
                             file_msg: disnake.Message,
                             wip: Wip):
-        # get updates channel
-        updates_channel = disnake.utils.get(
-            author.guild.text_channels, name="updates")
-        if updates_channel is None:
-            raise UserError("Could not find a #updates channel.")
+        # send embed
+        embed = disnake.Embed(
+            color=disnake.Color.blue(),
+            title="Updating..."
+        )
+        embed.set_footer(
+            text=f"{author.global_name} requested this update.",
+            icon_url=embeds.WUCK
+        )
+        reply = await file_msg.reply(embed=embed)
 
-        # we put in a placeholder to make sure we don't accidentally
-        # update twice
-        update = Update(
-            file=file_msg,
-            update=None,
-            timestamp=disnake.utils.utcnow())
-        wip.updates.append(update)
+        async def edit_status(msg: str):
+            embed.description = msg
+            await reply.edit(embed=embed)
 
-        reply = await file_msg.reply(embed=embeds.success(
-            f"{author.mention} has requested an update."))
+        guild = author.guild
 
-        # upload to soundcloud
+        try:
+            # get updates channel
+            updates_channel = disnake.utils.get(
+                guild.text_channels, name="updates")
+            if updates_channel is None:
+                raise UserError("Could not find a #updates channel.")
 
-        # send update message to #updates
-        file = await file_msg.attachments[0].to_file()
-        update_msg = await updates_channel.send(file=file)
-        update.update = update_msg
+            await edit_status(
+                "Getting SoundCloud accounts for credited members...")
+            # generate soundcloud description
+            description = wip.soundcloud_description()
 
-        # update pinned
+            # if we ended up with members w/o linked soundcloud, fail
+            # until they link themselves
+            unlinked = wip.unlinked_members()
+            if unlinked:
+                mentions = "\n".join(m.mention for m in unlinked)
+                raise UserError(
+                    f"Unknown SoundCloud profiles for these users:\n"
+                    f"{mentions}\n"
+                    f"Use `/linksc` to register them."
+                )
+
+            if wip.track:
+                await edit_status("Deleting old track...")
+                await wip.track.delete()
+
+            # upload to soundcloud
+            await edit_status("Uploading new track...")
+
+            wip.track = await self.sc.upload_track(
+                file_url=file_msg.attachments[0].url,
+                title=wip.name,
+                description=description,
+                tags="wip"
+            )
+
+            # send update message to #updates
+            await edit_status(f"Sending to {updates_channel.mention}...")
+
+            embed = wip.as_embed(
+                title_prefix="\N{BELL}",
+                include_links=False,
+                use_update_timestamp=False,
+                show_help=False)
+
+            update_msg = await updates_channel.send(
+                embed=embed,
+                components=[
+                    # handled by wip.py
+                    disnake.ui.Button(
+                        label="Join WIP",
+                        emoji="\N{MICROPHONE}",
+                        style=disnake.ButtonStyle.primary,
+                        custom_id=f"wip_join_{wip.channel.id}"),
+                    disnake.ui.Button(
+                        label="SoundCloud",
+                        emoji="\N{SPEAKER WITH THREE SOUND WAVES}",
+                        style=disnake.ButtonStyle.link,
+                        url=wip.track.url)
+                ]
+            )
+
+            # send file in a separate message (just looks a bit better, imo)
+            file = await file_msg.attachments[0].to_file()
+            await updates_channel.send(file=file)
+
+            # save!
+            wip.updates.append(Update(
+                file=file_msg,
+                update=update_msg,
+                timestamp=disnake.utils.utcnow()
+            ))
+
+            # update pinned
+            await wip.update_pinned()
+
+            await reply.edit(embed=embeds.success(
+                f"Update requested by {author.mention} was successful.\n"
+                f"[View it here.]({update_msg.jump_url})"))
+
+        except UserError as e:
+            embed = embeds.error(e.args[0])
+            await reply.edit(embed=embed)
+        except Exception as e:
+            embed = embeds.error(
+                f"Unknown exception ({type(e).__name__}) raised. Tell Aria!")
+            await reply.edit(embed=embed)
+            raise e

@@ -5,20 +5,22 @@ from util.modal import send_modal
 from util.decorators import error_handler, UserError
 from util import embeds
 
-from secrets import token_hex
-
 from util.wip import Wip
 from util.json import State
+from util import soundcloud
 
 
 STATE_MANIFEST = {
     "wips": list[Wip]
 }
 
+
 class WipifyCog(commands.Cog):
     def __init__(self,
-                 bot: commands.InteractionBot):
+                 bot: commands.InteractionBot,
+                 sc: soundcloud.SoundCloud):
         self.bot = bot
+        self.sc = sc
 
     # delete all bot pin messages
     @commands.Cog.listener()
@@ -41,14 +43,15 @@ class WipifyCog(commands.Cog):
                 raise UserError("This WIP no longer exists.")
             role: disnake.Role = wip.role
             if role in inter.author.roles:
-                raise UserError("You're already in this WIP!")
+                raise UserError(
+                    f"You already have access to {wip.channel.mention}.")
             await inter.author.add_roles(role)
             await inter.response.send_message(
+                ephemeral=True,
                 embed=embeds.success(
                     f"You have been added to {wip.channel.mention}.\n"
                     f"To leave, use `/wip leave` from within its channel.")
             )
-
 
     # sends the wip modal and validates all input text
     async def _send_wip_modal(self,
@@ -59,7 +62,6 @@ class WipifyCog(commands.Cog):
                               ephemeral: bool = False):
         modal = {
             "title": modal_title,
-            "custom_id": token_hex(16),
             "components": [
                 disnake.ui.TextInput(
                     label="working title",
@@ -84,6 +86,7 @@ class WipifyCog(commands.Cog):
                 required=False
             ))
         modal = await send_modal(inter, **modal, ephemeral=ephemeral)
+        await inter.response.defer(with_message=True, ephemeral=ephemeral)
 
         if not hasattr(modal, "soundcloud"):
             modal.soundcloud = None
@@ -93,11 +96,13 @@ class WipifyCog(commands.Cog):
         return modal
 
     @commands.slash_command(
-        description="Mark a channel as a WIP",
         dm_permission=False,
         default_member_permissions=disnake.Permissions.none())
     @error_handler
     async def wipify(self, inter: disnake.ApplicationCommandInteraction):
+        """
+        Converts the current channel into a WIP.
+        """
         # create modal
         modal = await self._send_wip_modal(
             inter,
@@ -106,11 +111,19 @@ class WipifyCog(commands.Cog):
             modal_offer_soundcloud=not inter.channel.name.startswith("sketch")
         )
 
+        # parse soundcloud
+        track = None
+
+        if modal.soundcloud:
+            track = await self.sc.resolve(modal.soundcloud)
+            if type(track) is not soundcloud.Track:
+                track = None
+
         # create WIP
         await Wip.from_channel(
             name=modal.name,
             progress=modal.progress,
-            soundcloud=modal.soundcloud,
+            track=track,
             existing_channel=inter.channel,
             extra_members=(inter.author,)
         )
@@ -151,10 +164,12 @@ class WipifyCog(commands.Cog):
 
         wip = await Wip.from_channel(name=modal.name,
                                      progress=modal.progress,
-                                     soundcloud=modal.soundcloud,
                                      existing_channel=None,
                                      extra_members=tuple({
                                          inter.author, message.author}))
+
+        file = await message.attachments[0].to_file()
+        await wip.channel.send(file=file)
 
         embed = disnake.Embed(
             color=disnake.Color.blue(),
@@ -173,8 +188,9 @@ class WipifyCog(commands.Cog):
             value=message.author.mention,
             inline=True)
 
-        embed.set_footer(text=embeds.success().footer.text,
-                         icon_url=embeds.WUCK)
+        embed.set_footer(
+            text=embeds.success().footer.text,
+            icon_url=embeds.WUCK)
 
         await inter.followup.send(
             embed=embed,

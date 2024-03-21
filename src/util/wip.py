@@ -6,9 +6,7 @@ from util.json import State, JsonSerializable
 from util.decorators import UserError
 from util.embeds import WUCK
 
-
-class SoundcloudTrack:
-    pass
+from util import soundcloud
 
 
 class Update(JsonSerializable):
@@ -26,17 +24,21 @@ class Wip(JsonSerializable):
     MANIFEST = {
         "name": str,
         "progress": int,
-        "soundcloud": Optional[SoundcloudTrack],
+        "track": Optional[soundcloud.Track],
         "channel": disnake.TextChannel,
         "role": disnake.Role,
         "credit": {
-            "producers": list[disnake.Member],
-            "vocalists": list[disnake.Member]
+            "producers": list[disnake.User],
+            "vocalists": list[disnake.User]
         },
         "pinned": Optional[disnake.Message],
         "updates": list[Update],
         "created_timestamp": datetime
     }
+
+    @property
+    def guild(self) -> disnake.Guild:
+        return self.channel.guild
 
     @staticmethod
     def _get_channel_name(name: str, progress: int):
@@ -116,7 +118,7 @@ class Wip(JsonSerializable):
             cls, *,
             name: str,
             progress: Union[str, int],
-            soundcloud: Optional[SoundcloudTrack] = None,
+            track: Optional[soundcloud.Track] = None,
             existing_channel: Optional[disnake.TextChannel] = None,
             extra_members: Optional[list[disnake.Member]] = None):
 
@@ -187,7 +189,7 @@ class Wip(JsonSerializable):
         # create the wip
         wip = Wip(name=name,
                   progress=progress,
-                  soundcloud=soundcloud,
+                  track=track,
                   channel=channel,
                   role=new_role,
                   updates=[],
@@ -208,6 +210,7 @@ class Wip(JsonSerializable):
         State().save()
         return wip
 
+    # TODO remove (replace w as_embed)
     def view_embed(self):
         timestamp = self.created_timestamp
         if len(self.updates) > 0:
@@ -242,37 +245,90 @@ class Wip(JsonSerializable):
 
         return embed
 
-    async def update_pinned(self):
-        timestamp = self.created_timestamp
-        if len(self.updates) > 0:
-            timestamp = self.updates[-1].timestamp
+    def soundcloud_description(self):
+        vocalists = self.credit.vocalists
+        vocalists = (v for v in vocalists if v in State().soundclouds)
+        vocalists = ["@" + State().soundclouds[v].permalink for v in vocalists]
+        vocalists = vocalists or ["nobody"]
+
+        producers = self.credit.producers
+        producers = (p for p in producers if p in State().soundclouds)
+        producers = ["@" + State().soundclouds[p].permalink for p in producers]
+        producers = producers or ["nobody"]
+
+        return "\n".join(
+            ["featuring:", *vocalists, "\nproduced by:", *producers])
+
+    def unlinked_members(self):
+        members = set(*self.credit.vocalists, *self.credit.producers)
+        linked = set(State().soundclouds.keys())
+        return members - linked
+
+    def as_embed(self, *,
+                 title_prefix: str,
+                 include_links: bool,
+                 use_update_timestamp: bool,
+                 show_help: bool):
 
         embed = disnake.Embed(
             color=disnake.Color.blue(),
-            title=f"\N{PUSHPIN} {self.name} ({self.progress}%)",
-            timestamp=timestamp
-        )
-        embed.set_footer(
-            text="Last update",
-            icon_url=WUCK
+            title=f"{title_prefix} {self.name} ({self.progress}%)"
         )
 
-        vocalists = "nobody (try `/wip credit vocalist`)"
-        producers = "nobody (try `/wip credit producer`)"
+        # set timestamp.
+        # we use the "created at" timestamp unless specified otherwise
+        if self.updates and use_update_timestamp:
+            embed.timestamp = self.updates[-1].timestamp
+            embed.set_footer(
+                text="last update",
+                icon_url=WUCK
+            )
+        else:
+            embed.timestamp = self.created_timestamp
+            embed.set_footer(text="created on", icon_url=WUCK)
+
+        # set up credit
+        if show_help:
+            vocalists = "nobody (try `/wip credit vocalist`)"
+            producers = "nobody (try `/wip credit producer`)"
+        else:
+            vocalists = "nobody"
+            producers = "nobody"
+
         if self.credit.vocalists:
             vocalists = "\n".join(
-                map(lambda a: f"<@{a.id}>", self.credit.vocalists))
+                map(lambda a: a.mention, self.credit.vocalists))
         if self.credit.producers:
             producers = "\n".join(
-                map(lambda a: f"<@{a.id}>", self.credit.producers))
+                map(lambda a: a.mention, self.credit.producers))
 
-        embed.add_field(name="featuring:", value=vocalists, inline=False)
-        embed.add_field(name="produced by:", value=producers, inline=False)
+        embed.add_field(name="featuring:", value=vocalists, inline=True)
+        embed.add_field(name="produced by:", value=producers, inline=True)
 
-        # TODO
-        # - link to most recent update
-        # - link to soundcloud
-        # (maybe with buttons?)
+        if not include_links:
+            return embed
+
+        # create links
+        links = []
+        if self.track:
+            links.append(f"[soundcloud]({self.track.url})")
+        if self.updates:
+            links.append(f"[last update]({self.updates[-1].update.jump_url})")
+
+        if links:
+            embed.add_field(
+                name="links:", value="\n".join(links), inline=False)
+
+        return embed
+
+    async def update_pinned(self):
+
+        embed = self.as_embed(
+            title_prefix="\N{PUSHPIN}",
+            include_links=True,
+            use_update_timestamp=True,
+            show_help=True)
+
         if self.pinned is None:
             self.pinned = await self.channel.send(embed=embed)
         else:
@@ -300,5 +356,19 @@ class Wip(JsonSerializable):
         if name is not None or progress is not None:
             await self.channel.edit(
                 name=self._get_channel_name(self.name, self.progress))
+
+        if self.updates:
+            update_embed = self.as_embed(
+                title_prefix="\N{BELL}",
+                include_links=False,
+                use_update_timestamp=False,
+                show_help=False)
+            await self.updates[-1].update.edit(embed=update_embed)
+
+        if self.track:
+            await self.track.edit(
+                title=name,
+                description=self.soundcloud_description()
+            )
 
         await self.update_pinned()

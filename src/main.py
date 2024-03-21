@@ -3,8 +3,11 @@ from disnake.ext import commands
 
 import json
 import importlib
-from inspect import isclass
+import asyncio
+
+from inspect import isclass, signature
 from util.json import Secrets, State
+from util import soundcloud
 
 SECRETS_FILENAME = "secrets.json"
 STATE_FILENAME = "state.json"
@@ -12,6 +15,7 @@ COGS_FOLDER = "src/cogs"
 
 
 def main():
+    loop = asyncio.new_event_loop()
 
     # we have to hack some initialization stuff out of the secrets file
     # because we can't get it as a fancy object until the bot is started
@@ -19,27 +23,29 @@ def main():
         secrets = json.load(fp)
     bot_token = secrets["bot_token"]
     test_guilds = secrets["test_guilds"]
+    oauth_token = secrets["soundcloud_oauth"]
     del secrets
 
-    # setup bot
     intents = disnake.Intents.default()
     intents.members = True
     intents.message_content = True
     bot = commands.InteractionBot(
-        intents=intents, test_guilds=test_guilds)
+        intents=intents,
+        test_guilds=test_guilds,
+        loop=loop)
 
-    # wait for ready to do async stuff--that way we still get to use
-    # bot.run
+    sc = loop.run_until_complete(soundcloud.SoundCloud.create(oauth_token))
+
     async def _on_ready():
-
         cogs = []
         state_manifest = {}
         secrets_manifest = {
             "test_guilds": list[int],
             "bot_token": str,
-            "admin": disnake.User
+            "admin": disnake.User,
+            "soundcloud_oauth": str
         }
-        # import cogs (executing these once lets all classes get registered)
+        # import cogs first to load manifest
         for ext in disnake.utils.search_directory(COGS_FOLDER):
             ext_module = importlib.import_module(ext.removeprefix("src."))
             cogs.extend(c for c in ext_module.__dict__.values() if
@@ -50,45 +56,34 @@ def main():
                 getattr(ext_module, "SECRETS_MANIFEST", {}))
 
         # load json
-        await State.create(STATE_FILENAME, state_manifest, bot=bot)
-        await Secrets.create(SECRETS_FILENAME, secrets_manifest, bot=bot)
+        await State.create(
+            STATE_FILENAME, state_manifest, bot=bot, sc=sc)
+        await Secrets.create(
+            SECRETS_FILENAME, secrets_manifest, bot=bot, sc=sc)
 
         # load cogs
         for cog in cogs:
             print(f"Initializing {cog.__qualname__}...")
-            bot.add_cog(cog(bot))
+            params = signature(cog.__init__).parameters.keys()
+            all_kwargs = {"bot": bot, "sc": sc}
+            kwargs = {k: v for (k, v) in all_kwargs.items() if k in params}
+            bot.add_cog(cog(**kwargs))
 
-        # TODO: add reload cmd
-        # @commands.slash_command(
-        #     dm_permission=True,
-        #     default_member_permissions=disnake.Permissions.all())
-        # async def reload(inter: disnake.ApplicationCommandInteraction):
-        #     await bot.reload_extension
+        # we don't want to run this multiple times
+        bot.remove_listener(_on_ready, "on_ready")
 
     bot.add_listener(_on_ready, "on_ready")
 
-    bot.run(token=bot_token)
+    try:
+        loop.run_until_complete(bot.start(token=bot_token))
+    except KeyboardInterrupt:
+        State().save()
+        Secrets().save()
+        loop.run_until_complete(bot.close())
+        loop.run_until_complete(sc.close())
+    finally:
+        loop.close()
 
-
-async def soundcloud_test():
-    with open(SECRETS_FILENAME, "r") as fp:
-        secrets = json.load(fp)
-        oauth = secrets["soundcloud_oauth"]
-
-    from util import soundcloud
-    session = await soundcloud.Session.create(oauth)
-    # url = "https://cdn.discordapp.com/attachments/1214299973374713919/121534" \
-    #     "5389826220083/walter_white_scream.wav?ex=6605a418&is=65f32f18&hm=02" \
-    #     "d0c1b6d11fd803f893353abcad1386569bba8e6525367986934a3546ff49b9&"
-    # json_ = await session.upload_track(url, title="fortnite song", description="heyyyy :p", tags="fortnitecore")
-    # print(json.dumps(json_, indent=2))
-    url = "https://soundcloud.com/least_favorite/fortnite-song-7/s-DvZspJB94eR"
-    track = await session.fetch_track(url)
-    await track.edit(title="cool awesome song 12")
-    await session.close()
-    pass
 
 if __name__ == "__main__":
     main()
-    # import asyncio
-    # asyncio.run(soundcloud_test())

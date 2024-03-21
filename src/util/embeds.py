@@ -1,6 +1,7 @@
 import disnake
 # provides some common embeds
-WUCK = "https://cdn.discordapp.com/attachments/742588983799840881/820412558594801684/wcvector.png"
+WUCK = "https://cdn.discordapp.com/attachments/" \
+       "742588983799840881/820412558594801684/wcvector.png"
 
 
 def error(msg: str):

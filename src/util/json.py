@@ -193,7 +193,7 @@ class JsonDb(metaclass=SingletonMeta):
         if type(data) is list:
             return list(map(cls.serialize, data))
 
-        # parse external serializers
+        # TODO fix fr
         if type(data) in cls._serializers:
             return cls._serializers[type(data)](data)
 
@@ -294,7 +294,7 @@ class JsonDb(metaclass=SingletonMeta):
             return await deserializer.f(data, **kwargs)
 
         raise NotImplementedError(
-            f"no way to deserialize {typename(type(target))}")
+            f"no way to deserialize {typename(TargetType)}")
 
     # utilizing deserialize, parses a dict according to an according manifest.
     # this is essentially a special case of deserialize
@@ -399,13 +399,21 @@ class State(JsonDb):
 
 # disnake.User
 @JsonDb.deserializer
-async def deserialize(id_: int, /, bot: disnake.Client, **_) -> disnake.User:
+async def deserialize(id_: str, /, bot: disnake.Client, **_) -> disnake.User:
+    id_ = int(id_)
     return bot.get_user(id_) or await bot.fetch_user(id_)
 
 
 @JsonDb.serializer
-def serialize(user: disnake.User) -> int:
-    return user.id
+def serialize(user: disnake.User) -> str:
+    return str(user.id)
+
+
+# include disnake.Member here,
+# even though we make a point not to deserialize to it
+@JsonDb.serializer
+def serialize(user: disnake.Member) -> str:
+    return str(user.id)
 
 
 # disnake.TextChannel

@@ -4,6 +4,7 @@ from disnake.ext import commands
 from util import embeds
 from util.wip import Wip
 from util.decorators import error_handler, UserError
+from util import soundcloud, modal
 
 from typing import Optional
 from functools import wraps
@@ -37,8 +38,11 @@ def _wip_wrapper(f):
 
 
 class WipCog(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self,
+                 bot: commands.InteractionBot,
+                 sc: soundcloud.SoundCloud):
         self.bot = bot
+        self.sc = sc
 
     @commands.slash_command(
         dm_permission=False,
@@ -46,13 +50,20 @@ class WipCog(commands.Cog):
     async def wip(self, inter: disnake.AppCommandInteraction):
         pass
 
-    @wip.sub_command(description="Joins a user to this WIP")
+    @wip.sub_command()
     @error_handler
     @_wip_wrapper
     async def join(self,
                    inter: disnake.AppCommandInteraction,
                    wip: Wip,
                    user: disnake.Member):
+        """
+        Joins another user to this WIP.
+
+        Parameters
+        -----------
+        user: The user to join.
+        """
 
         if wip.role in user.roles:
             raise UserError(f"{user.mention} is already in this WIP!")
@@ -64,13 +75,20 @@ class WipCog(commands.Cog):
                 f"{user.mention} added. Use `/wip credit` to credit them."
             ))
 
-    @wip.sub_command(description="Leaves this WIP")
+    @wip.sub_command()
     @error_handler
     @_wip_wrapper
     async def leave(self,
                     inter: disnake.AppCommandInteraction,
                     wip: Wip,
                     user: Optional[disnake.Member] = None):
+        """
+        Leaves a WIP, or removes another user.
+
+        Parameters
+        -----------
+        user: The user to remove. Default is yourself.
+        """
 
         if user is None:
             await inter.author.remove_roles(wip.role)
@@ -87,32 +105,45 @@ class WipCog(commands.Cog):
                 f"{user.mention} removed. Use `/wip credit` to remove credit."
             ))
 
-    @wip.sub_command(description="Changes the title of this WIP")
+    @wip.sub_command()
     @error_handler
     @_wip_wrapper
     async def title(self,
                     inter: disnake.AppCommandInteraction,
                     wip: Wip,
-                    title: str,
-                    progress: Optional[commands.Range(int, 0, 100)] = None):
+                    title: str):
+        """
+        Updates a song's title across Discord and SoundCloud.
+
+        Parameters
+        -----------
+        title: The new title.
+        """
         await inter.response.defer(with_message=True, ephemeral=True)
-        await wip.edit(name=title, progress=progress)
+        await wip.edit(name=title)
         await inter.followup.send(ephemeral=True, embed=embeds.success(
             f"Title successfully changed to \"{title}\"."))
 
-    @wip.sub_command(description="Changes the progress level of this WIP")
+    @wip.sub_command()
     @error_handler
     @_wip_wrapper
     async def progress(self,
                        inter: disnake.AppCommandInteraction,
                        wip: Wip,
                        progress: commands.Range(int, 0, 100)):
+        """
+        Updates a song's progress across Discord and SoundCloud.
+
+        Parameters
+        -----------
+        progress: The current progress, as a percentage.
+        """
         await inter.response.defer(with_message=True, ephemeral=True)
         await wip.edit(progress=progress)
         await inter.followup.send(ephemeral=True, embed=embeds.success(
             f"Progress updated to `{progress}%`!"))
 
-    @wip.sub_command(description="Adds/removes credit for a user.")
+    @wip.sub_command()
     @error_handler
     @_wip_wrapper
     async def credit(self,
@@ -121,8 +152,14 @@ class WipCog(commands.Cog):
                      credit_type: str = commands.Param(
                          choices=["vocalist", "producer"]),
                      user: Optional[disnake.Member] = None):
-        await inter.response.defer(with_message=True, ephemeral=True)
+        """
+        Credits a user on a WIP.
 
+        Parameters
+        -----------
+        credit_type: The type of credit to bestow.
+        user: The user to give credit to.
+        """
         if user is None:
             user = inter.author
 
@@ -131,19 +168,74 @@ class WipCog(commands.Cog):
 
         if user in credit_list:
             credit_list.remove(user)
-            await wip.update_pinned()
             response = f"{user.mention} removed as a {credit_type}."
             if user == inter.author:
                 response = f"You have been removed as a {credit_type}."
         else:
+            # check if soundcloud is available
+            if user not in State().soundclouds:
+                await self.link_soundcloud(inter, user)
+
             credit_list.append(user)
-            await wip.update_pinned()
             response = f"{user.mention} added as a {credit_type}."
             if user == inter.author:
                 response = f"You have been added as a {credit_type}."
 
-        await inter.followup.send(ephemeral=True,
-                                  embed=embeds.success(response))
+        # this forces an update of all embeds + soundcloud
+        await wip.edit()
+        await inter.response.send_message(
+            ephemeral=True, embed=embeds.success(response))
+
+    async def link_soundcloud(self,
+                              inter: disnake.ApplicationCommandInteraction,
+                              user: disnake.User):
+        response = await modal.send_modal(
+            inter, ephemeral=True,
+            title=f"Link {user.name}'s SoundCloud",
+            components=[disnake.ui.TextInput(
+                label="SoundCloud Link",
+                placeholder="https://soundcloud.com/skrillex",
+                custom_id="link",
+                required=True
+            )]
+        )
+
+        sc_user = await self.sc.resolve(response.link)
+        if type(sc_user) is not soundcloud.User:
+            raise UserError("Could not resolve the provided link.")
+
+        # we need to map the underlying user,
+        # people will have the same sc accounts no matter which
+        # server
+        if type(user) is disnake.Member:
+            State().soundclouds[user._user] = sc_user
+        else:
+            State().soundclouds[user] = sc_user
+
+        return sc_user
+
+    @commands.slash_command(
+        dm_permission=False,
+        default_member_permissions=disnake.Permissions.none())
+    @error_handler
+    async def linksc(self, inter: disnake.ApplicationCommandInteraction,
+                     user: Optional[disnake.User] = None):
+        """
+        Links a Discord account to its owner's SoundCloud.
+
+        Parameters
+        -----------
+        user: The user to link.
+        """
+        if user is None:
+            user = inter.author
+        sc_user = await self.link_soundcloud(inter, user)
+
+        await inter.response.send_message(
+            ephemeral=True,
+            embed=embeds.success(
+                f"Linked {user.mention}'s [SoundCloud]({sc_user.url}).")
+        )
 
 
 def setup(bot):

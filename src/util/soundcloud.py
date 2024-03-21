@@ -56,7 +56,11 @@ class TrackOrPlaylist(ScObject):
         self.description = description
         self.artwork_url = artwork_url
         self.secret_token = secret_token
-        self.author = User(**user)
+        self.author = User(self.sc, **user)
+
+    @property
+    def mine(self):
+        return self.author.s_id == self.sc.me.s_id
 
     @property
     def private(self):
@@ -64,14 +68,40 @@ class TrackOrPlaylist(ScObject):
 
 
 class Track(TrackOrPlaylist):
+    def __init__(self, *args, tag_list: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tags = tag_list
+
     async def edit(self,
                    title: str = None,
                    description: str = None,
                    tags: str = None):
-        pass
+
+        if description is None:
+            description = self.description
+        self.description = description
+
+        if title is None:
+            title = self.title
+        self.title = title
+
+        if tags is None:
+            tags = self.tags
+        self.tags = tags
+
+        await self.sc.routes["edit_track"].run(
+            s_id=self.s_id,
+            description=description,
+            permalink=self.permalink,
+            tag_list=tags,
+            title=title,
+            monetization=MONETIZATION if self.sc.me.pro else None
+        )
 
     async def delete(self):
-        pass
+        if not self.mine:
+            return
+        await self.sc.routes["delete_track"].run(s_id=self.s_id)
 
     async def update_artwork(self, artwork_url: str):
         pass
@@ -94,11 +124,16 @@ class Playlist(TrackOrPlaylist):
 
 class User(ScObject):
     def __init__(self, *args, avatar_url: str, username: str,
-                 creator_subscription: dict, **kwargs):
+                 creator_subscriptions=None, badges=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.avatar_url = avatar_url
         self.username = username
-        self.pro = creator_subscription["product"]["id"] != "free"
+        if badges:
+            self.pro = badges["pro"] or badges["pro_unlimited"]
+        elif creator_subscriptions:
+            self.pro = creator_subscriptions[0]["product"]["id"] != "free"
+        else:
+            raise TypeError("Missing creator_subscriptions or badges")
         # TODO (possibly): check if we're following
 
 
@@ -142,7 +177,7 @@ class Route:
 
             if type(v) is dict:
                 out[k] = cls._parse_args(v, **kwargs)
-            if type(v) is str:
+            elif type(v) is str:
                 out[k] = v.format(**kwargs)
             else:
                 out[k] = v
@@ -179,7 +214,7 @@ class Route:
             result = await resp.json()
 
         if self.parse:
-            result = self.parse(self, **result)
+            result = self.parse(self.sc, **result)
             if asyncio.iscoroutine(result):
                 return await result
         return result
@@ -201,7 +236,7 @@ class SoundCloud:
                 self, "post", "/uploads/{uid}/track-transcoding"),
 
             "track_permalink_availability": Route(
-                self, "post", "/track_permalink_availability",
+                self, "get", "/track_permalink_availability",
                 params=["permalink"],
                 parse=lambda _, **x: x.get(
                     "track_permalink_available", False)),
@@ -216,10 +251,33 @@ class SoundCloud:
                 "original_filename": NotRequired,
                 "uid": NotRequired,
                 "monetization": NotRequired
-            }}, parse=Track),
+            }}),
+
+            "edit_track": Route(
+                self, "put", "/tracks/soundcloud:tracks:{s_id}",
+                json={"track": {
+                    "description": Required,
+                    "downloadable": True,
+                    "permalink": Required,
+                    "sharing": "private",
+                    "tag_list": Required,
+                    "title": Required,
+                    "monetization": NotRequired
+                }}, parse=Track),
+
+            "delete_track": Route(self, "delete",
+                                  "/tracks/soundcloud:tracks:{s_id}"),
 
             "me": Route(self, "get", "/me", parse=User),
+
+            "fetch_track": Route(self, "get",
+                                 "/tracks/soundcloud:tracks:{s_id}",
+                                 params={"secret_token": NotRequired},
+                                 parse=Track)
         }
+
+    async def close(self):
+        await self.http.close()
 
     async def get_client_id(self):
         ASSET_RE = r'src="(https://a-v2.sndcdn.com/assets/.*\.js)'
@@ -255,7 +313,7 @@ class SoundCloud:
         if self.client_id is None:
             raise RuntimeError("Could not parse out a client id")
 
-        self.me = await self.routes["me"].run()
+        self.me: User = await self.routes["me"].run()
 
     @classmethod
     async def create(cls, oauth_token: str):
@@ -264,7 +322,12 @@ class SoundCloud:
         return sc
 
     async def resolve(self, url: str) -> Union[Track, User, Playlist, None]:
-        resolved = await self.routes["resolve"].run(url=url)
+
+        try:
+            resolved = await self.routes["resolve"].run(url=url)
+        except aiohttp.ClientResponseError:
+            return None
+
         kind = resolved["kind"]
         if kind == "user":
             return User(self, **resolved)
@@ -314,18 +377,23 @@ class SoundCloud:
         permalink = await self.find_permalink(title)
 
         # upload!! :D
-        return await self.routes["upload_track"].run(
+        result = await self.routes["upload_track"].run(
             description=description,
             permalink=permalink,
             tag_list=tags,
             title=title,
             original_filename=filename,
             uid=uid,
-            monetization=MONETIZATION if self.me.has_pro else None
+            monetization=MONETIZATION if self.me.pro else None
         )
 
-    async def fetch_track(self, s_id: int) -> Track:
-        pass
+        # re-fetch, since not all info is available
+        return await self.fetch_track(result["id"], result["secret_token"])
+
+    async def fetch_track(
+            self, s_id: int, secret_token: Optional[str] = None) -> Track:
+        return await self.routes["fetch_track"].run(
+            s_id=s_id, secret_token=secret_token)
 
     async def fetch_playlist(self, s_id: int) -> Playlist:
         pass
@@ -335,30 +403,41 @@ class SoundCloud:
 
 
 @JsonDb.serializer
-def serialize(user: User) -> int:
-    return user.s_id
+def serialize(user: User) -> str:
+    return str(user.s_id)
 
 
 @JsonDb.deserializer
-def deserialize(s_id: int, sc: SoundCloud, **_) -> User:
+async def deserialize(s_id: str, sc: SoundCloud, **_) -> User:
+    s_id = int(s_id)
     return await sc.fetch_user(s_id)
 
 
 @JsonDb.serializer
-def serialize(playlist: Playlist) -> int:
-    return playlist.s_id
+def serialize(playlist: Playlist) -> str:
+    if playlist.secret_token is None:
+        return str(playlist.s_id)
+    return f"{playlist.s_id}|{playlist.secret_token}"
 
 
 @JsonDb.deserializer
-def deserialize(s_id: int, sc: SoundCloud, **_) -> Playlist:
-    return await sc.fetch_playlist(s_id)
+async def deserialize(playlist: str, sc: SoundCloud, **_) -> Playlist:
+    if "|" in playlist:
+        s_id, token = playlist.split("|")
+        return await sc.fetch_playlist(int(s_id), token)
+    return await sc.fetch_track(int(playlist))
 
 
 @JsonDb.serializer
-def serialize(track: Track) -> int:
-    return track.s_id
+def serialize(track: Track) -> str:
+    if track.secret_token is None:
+        return str(track.s_id)
+    return f"{track.s_id}|{track.secret_token}"
 
 
 @JsonDb.deserializer
-def deserialize(s_id: int, sc: SoundCloud, **_) -> Track:
-    await sc.fetch_track(s_id)
+async def deserialize(track: str, sc: SoundCloud, **_) -> Track:
+    if "|" in track:
+        s_id, token = track.split("|")
+        return await sc.fetch_track(int(s_id), token)
+    return await sc.fetch_track(int(track))

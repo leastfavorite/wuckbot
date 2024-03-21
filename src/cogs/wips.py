@@ -24,9 +24,12 @@ class WipsCog(commands.Cog):
     async def wips(self, inter: disnake.AppCommandInteraction):
         pass
 
-    @wips.sub_command(description="Toggles access to all WIP channels")
+    @wips.sub_command()
     @error_handler
     async def viewall(self, inter: disnake.AppCommandInteraction):
+        """
+        Toggles access to all WIP channels.
+        """
         view_wips_role = disnake.utils.get(inter.guild.roles, name="view wips")
         if view_wips_role is None:
             raise UserError("Couldn't find a role called 'view wips'")
@@ -120,13 +123,21 @@ class WipsCog(commands.Cog):
             )
         ]
 
-    @wips.sub_command(description="Shows information about WIPs")
+    @wips.sub_command()
     @error_handler
     async def view(
             self,
             inter: disnake.AppCommandInteraction,
             wip: Optional[str] = commands.Param(
+                default=None,
                 autocomplete=view_autocomplete)):
+        """
+        Opens an index of all WIPs, with option to join each one.
+
+        Parameters
+        ----------
+        wip: The WIP to view. Defaults to the newest one.
+        """
         if wip:
             index = [wip.name.lower() for wip in State().wips].index(
                 wip.lower())
@@ -148,12 +159,19 @@ class WipsCog(commands.Cog):
 
         return [name for name in wips if user_input.lower() in name.lower()]
 
-    @wips.sub_command(description="Joins a WIP")
+    @wips.sub_command()
     @error_handler
     async def join(
             self,
             inter: disnake.AppCommandInteraction,
             wip: str = commands.Param(autocomplete=join_autocomplete)):
+        """
+        Joins a WIP you're not a part of.
+
+        Parameters
+        ----------
+        wip: The WIP to join.
+        """
         wip = disnake.utils.get(State().wips, name=wip)
         if wip is None:
             raise UserError("Could not find that WIP.")
