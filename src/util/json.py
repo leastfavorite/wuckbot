@@ -54,7 +54,8 @@ class JsonDict(dict):
 
 class JsonSerializable:
     @classmethod
-    def validate_dict(cls, kwargs: dict, manifest, prior_scope=None):
+    def validate_dict(cls, kwargs: dict, manifest,
+                      prior_scope=None, unsafe=False):
         prior_scope = prior_scope or []
         ret = {}
         for key, type_ in manifest.items():
@@ -63,11 +64,12 @@ class JsonSerializable:
             # if we have a nested dict entry
             if type(type_) is dict:
                 ret[key] = \
-                    cls.validate_dict(value, type_, prior_scope + [key])
+                    cls.validate_dict(
+                        value, type_, prior_scope + [key], unsafe)
                 continue
 
             if key not in kwargs or kwargs[key] is None:
-                if is_optional(type_):
+                if is_optional(type_) or unsafe:
                     ret[key] = None
                     continue
                 else:
@@ -84,11 +86,12 @@ class JsonSerializable:
                         f"expected {repr(type_)}, got {repr(value)}")
         return JsonDict(**ret)
 
-    def __init__(self, **kwargs):
+    def __init__(self, _unsafe=False, **kwargs):
         if not hasattr(self, "MANIFEST"):
             raise NotImplementedError(
                 f"MANIFEST not defined for {type(self).__qualname__}")
-        new_dict = self.validate_dict(kwargs, self.MANIFEST)
+        new_dict = self.validate_dict(
+            kwargs, self.MANIFEST, unsafe=_unsafe)
         self.__dict__.update(new_dict)
 
     @classmethod
@@ -165,7 +168,10 @@ class JsonDb(metaclass=SingletonMeta):
             print(f"{filename} doesn't exist, using default...")
             data = {}
 
-        parsed = await cls.deserialize_with_manifest(data, manifest, **kwargs)
+        parsed, unresolved = await cls.deserialize_with_manifest(
+            data, manifest, **kwargs)
+        if unresolved:
+            raise ValueError(f"Missing top-level keys: {unresolved}")
         ret = cls(parsed, filename)
 
         @tasks.loop(minutes=60)
@@ -233,7 +239,11 @@ class JsonDb(metaclass=SingletonMeta):
             return None
 
         if type(target) is dict:
-            return await cls.deserialize_with_manifest(data, target, **kwargs)
+            result, unresolved = await cls.deserialize_with_manifest(
+                data, target, **kwargs)
+            if unresolved:
+                raise ValueError(f"Couldn't resolve keys: {unresolved}")
+            return result
 
         if is_optional(target):
             ty = list(filter(
@@ -278,10 +288,20 @@ class JsonDb(metaclass=SingletonMeta):
             return list(all_values)
 
         if issubclass(TargetType, JsonSerializable):
+            result, unresolved = await cls.deserialize_with_manifest(
+                data, TargetType.MANIFEST, **kwargs)
+
+            if unresolved:
+                if hasattr(TargetType, "handle_unresolved"):
+                    return await TargetType.handle_unresolved(unresolved,
+                        **kwargs, **result)
+                else:
+                    raise ValueError(
+                        f"{typename(TargetType)} had unresolved keys:"
+                        " {unresolved}")
+
             return await TargetType.create(
-                **kwargs,
-                **await cls.deserialize_with_manifest(
-                    data, TargetType.MANIFEST, **kwargs))
+                **kwargs, **result)
 
         if TargetType in cls._deserializers.keys():
             # TODO: when serializers return lists or dicts,
@@ -317,7 +337,7 @@ class JsonDb(metaclass=SingletonMeta):
         unimplemented_keys = required_keys - data.keys()
         if unimplemented_keys:
             raise ValueError(
-                f"Required keys are unimplemented: {unimplemented_keys}")
+                f"Required keys aren't present in JSON: {unimplemented_keys}")
 
         # we technically get this order guaranteed to us in newer versions
         # of python--i'm still wary regardless
@@ -331,16 +351,14 @@ class JsonDb(metaclass=SingletonMeta):
         # parse
         parsed_data = dict(zip(manifest_keys, parsed_vals))
         parsed_data = {k: v for (k, v) in parsed_data.items() if v is not None}
+        resolved_keys = set(parsed_data.keys())
+
+        result = JsonDict(**{k: parsed_data.get(k) for k in manifest.keys()})
 
         # check again for required keys that aren't implemented
         # now that things are parsed, some things might not resolve to objects
-        unimplemented_keys = required_keys - set(parsed_data.keys())
-        if unimplemented_keys:
-            raise ValueError(
-                f"Required keys could not be resolved: {unimplemented_keys}")
-
-        # wrap in a JsonDict, a wrapper module used to allow dot access
-        return JsonDict(**{k: parsed_data.get(k) for k in manifest.keys()})
+        unresolved = required_keys - resolved_keys
+        return result, unresolved
 
     # DECORATORS
     # provides an @JsonDb.serializer and @JsonDb.deserializer for registering
@@ -396,6 +414,22 @@ class State(JsonDb):
 #     # pass
 #
 # def serialize(obj: disnake.Message) -> str
+
+# disnake.Guild
+@JsonDb.deserializer
+async def deserialize(id_: str, /, bot: disnake.Client, **_) -> disnake.Guild:
+    id_ = int(id_)
+    if (guild := bot.get_guild(id_)):
+        return guild
+    guild: disnake.Guild = bot.fetch_guild(id_)
+    await guild.fetch_channels()
+    return guild
+
+
+@JsonDb.serializer
+def serialize(guild: disnake.Guild) -> str:
+    return str(guild.id)
+
 
 # disnake.User
 @JsonDb.deserializer
@@ -482,4 +516,3 @@ async def deserialize(dt: int, **_) -> datetime:
 @JsonDb.serializer
 def serialize(dt: datetime) -> int:
     return int(dt.timestamp())
-
