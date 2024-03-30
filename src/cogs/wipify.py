@@ -1,13 +1,9 @@
 import disnake
 from disnake.ext import commands
 
-from util.modal import send_modal
-from util.decorators import error_handler, UserError
-from util import embeds
-
-from util.wip import Wip
-from util.json import State
-from util import soundcloud
+from utils import embeds, send_modal, error_handler, UserError, get_audio_attachment
+from datatypes import Wip
+import soundcloud
 
 
 STATE_MANIFEST = {
@@ -18,40 +14,20 @@ STATE_MANIFEST = {
 class WipifyCog(commands.Cog):
     def __init__(self,
                  bot: commands.InteractionBot,
-                 sc: soundcloud.SoundCloud):
+                 sc: soundcloud.Client):
         self.bot = bot
         self.sc = sc
 
     # delete all bot pin messages
     @commands.Cog.listener()
     async def on_message(self, message: disnake.Message):
-        if message.type != disnake.MessageType.pins_add:
-            return
-        if message.author.id != message.guild.me.id:
-            return
-        if message.channel.category.name == "WIPs":
+        if message.type == disnake.MessageType.pins_add \
+                and message.guild is not None \
+                and message.author.id == message.guild.me.id \
+                and isinstance(message.channel, disnake.TextChannel) \
+                and message.channel.category is not None \
+                and message.channel.category.name == "WIPs":
             await message.delete()
-
-    @commands.Cog.listener("on_button_click")
-    @error_handler
-    async def on_button_click(self, inter: disnake.MessageInteraction):
-        if inter.component.custom_id.startswith("wip_join_"):
-            channel_id = int(
-                inter.component.custom_id.removeprefix("wip_join_"))
-            wip = disnake.utils.get(State().wips, channel__id=channel_id)
-            if not wip:
-                raise UserError("This WIP no longer exists.")
-            role: disnake.Role = wip.role
-            if role in inter.author.roles:
-                raise UserError(
-                    f"You already have access to {wip.channel.mention}.")
-            await inter.author.add_roles(role)
-            await inter.response.send_message(
-                ephemeral=True,
-                embed=embeds.success(
-                    f"You have been added to {wip.channel.mention}.\n"
-                    f"To leave, use `/wip leave` from within its channel.")
-            )
 
     # sends the wip modal and validates all input text
     async def _send_wip_modal(self,
@@ -60,32 +36,36 @@ class WipifyCog(commands.Cog):
                               modal_song_placeholder: str,
                               modal_offer_soundcloud: bool = False,
                               ephemeral: bool = False):
-        modal = {
-            "title": modal_title,
-            "components": [
-                disnake.ui.TextInput(
-                    label="working title",
-                    placeholder=modal_song_placeholder,
-                    custom_id="name",
-                    max_length=50
-                ),
-                disnake.ui.TextInput(
-                    label="current progress (as a percentage)",
-                    placeholder="10%",
-                    custom_id="progress",
-                    max_length=4
-                )
-            ]
-        }
+
+        components = [
+            disnake.ui.TextInput(
+                label="working title",
+                placeholder=modal_song_placeholder,
+                custom_id="name",
+                max_length=50
+            ),
+            disnake.ui.TextInput(
+                label="current progress (as a percentage)",
+                placeholder="10%",
+                custom_id="progress",
+                max_length=4
+            )
+        ]
 
         if modal_offer_soundcloud:
-            modal["components"].append(disnake.ui.TextInput(
+            components.append(disnake.ui.TextInput(
                 label="soundcloud link",
                 placeholder="(leave empty if nothing is uploaded)",
                 custom_id="soundcloud",
                 required=False
             ))
-        modal = await send_modal(inter, **modal, ephemeral=ephemeral)
+
+        modal = await send_modal(
+            inter,
+            title=modal_title,
+            components=components,
+            ephemeral=ephemeral)
+
         await inter.response.defer(with_message=True, ephemeral=ephemeral)
 
         if not hasattr(modal, "soundcloud"):
@@ -98,7 +78,7 @@ class WipifyCog(commands.Cog):
     @commands.slash_command(
         dm_permission=False,
         default_member_permissions=disnake.Permissions.none())
-    @error_handler
+    @error_handler()
     async def wipify(self, inter: disnake.ApplicationCommandInteraction):
         """
         Converts the current channel into a WIP.
@@ -136,15 +116,21 @@ class WipifyCog(commands.Cog):
         description="Mark a channel as a WIP",
         dm_permission=False,
         default_member_permissions=disnake.Permissions.none())
-    @error_handler
+    @error_handler()
     async def message_wipify(self,
                              inter: disnake.ApplicationCommandInteraction,
                              message: disnake.Message):
+        guild: disnake.Guild = inter.guild
+
+        attachment = get_audio_attachment(message)
+        if not attachment:
+            return
+
         # create modal
-        if not message.attachments or \
-                not message.attachments[0].content_type.startswith("audio"):
-            sketchpad = disnake.utils.get(message.guild.text_channels,
-                                          name="sketchpad")
+        if not attachment:
+            sketchpad = disnake.utils.get(
+                guild.text_channels, name="sketchpad")
+
             if sketchpad is not None:
                 raise UserError(
                     "Use this command on a message with an audio file.\n"
@@ -153,23 +139,24 @@ class WipifyCog(commands.Cog):
                 raise UserError(
                     "Use this command on a message with an audio file.")
 
-        filename = message.attachments[0].filename
         modal = await self._send_wip_modal(
             inter,
             modal_title=f"Create WIP with {message.author.global_name}",
-            modal_song_placeholder=filename,
+            modal_song_placeholder=attachment.filename,
             modal_offer_soundcloud=False,
             ephemeral=False
         )
 
+        # make mypy happy
+        assert isinstance(message.author, disnake.Member)
+
         wip = await Wip.from_channel(name=modal.name,
                                      progress=modal.progress,
                                      existing_channel=None,
-                                     extra_members=tuple({
+                                     extra_members=list({
                                          inter.author, message.author}))
 
-        file = await message.attachments[0].to_file()
-        await wip.channel.send(file=file)
+        await wip.channel.send(file=await attachment.to_file())
 
         embed = disnake.Embed(
             color=disnake.Color.blue(),
@@ -196,5 +183,6 @@ class WipifyCog(commands.Cog):
             embed=embed,
             components=[disnake.ui.Button(
                 label="Join WIP",
+                emoji="\N{MICROPHONE}",
                 style=disnake.ButtonStyle.primary,
                 custom_id=f"wip_join_{wip.channel.id}")])

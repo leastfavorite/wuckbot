@@ -6,13 +6,13 @@ import importlib
 import asyncio
 
 from inspect import isclass, signature
-from util.json import Secrets, State
-from util import soundcloud
+
+from datatypes import Secrets, State
+import soundcloud
 
 SECRETS_FILENAME = "secrets.json"
 STATE_FILENAME = "state.json"
 COGS_FOLDER = "src/cogs"
-
 
 def main():
     loop = asyncio.new_event_loop()
@@ -34,7 +34,7 @@ def main():
         test_guilds=test_guilds,
         loop=loop)
 
-    sc = loop.run_until_complete(soundcloud.SoundCloud.create(oauth_token))
+    sc = loop.run_until_complete(soundcloud.Client.create(oauth_token))
 
     async def _on_ready():
         cogs = []

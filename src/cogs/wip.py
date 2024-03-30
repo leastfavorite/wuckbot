@@ -1,17 +1,14 @@
 import disnake
 from disnake.ext import commands
 
-from util import embeds
-from util.wip import Wip
-from util.decorators import error_handler, UserError
-from util import soundcloud, modal
+from utils import embeds, error_handler, UserError, send_modal
+from datatypes import Wip, State
+import soundcloud
 
 from typing import Optional
 from functools import wraps
 
 from inspect import signature
-
-from util.json import State
 
 STATE_MANIFEST = {
     "wips": list[Wip]
@@ -20,7 +17,8 @@ STATE_MANIFEST = {
 
 def _wip_wrapper(f):
     @wraps(f)
-    async def _inner(self, inter: disnake.AppCmdInter, *args, **kwargs):
+    async def _inner(self, inter: disnake.ApplicationCommandInteraction,
+                     *args, **kwargs):
         wip = disnake.utils.get(State().wips, channel=inter.channel)
         if wip is None:
             raise UserError("You are not in a WIP channel.")
@@ -40,26 +38,25 @@ def _wip_wrapper(f):
 class WipCog(commands.Cog):
     def __init__(self,
                  bot: commands.InteractionBot,
-                 sc: soundcloud.SoundCloud):
+                 sc: soundcloud.Client):
         self.bot = bot
         self.sc = sc
 
     @commands.slash_command(
         dm_permission=False,
         default_member_permissions=disnake.Permissions.none())
-    async def wip(self, inter: disnake.AppCommandInteraction):
+    async def wip(self, inter: disnake.ApplicationCommandInteraction):
         pass
 
     @wip.sub_command()
     @error_handler
     @_wip_wrapper
     async def join(self,
-                   inter: disnake.AppCommandInteraction,
+                   inter: disnake.ApplicationCommandInteraction,
                    wip: Wip,
                    user: disnake.Member):
         """
         Joins another user to this WIP.
-
         Parameters
         -----------
         user: The user to join.
@@ -79,7 +76,7 @@ class WipCog(commands.Cog):
     @error_handler
     @_wip_wrapper
     async def leave(self,
-                    inter: disnake.AppCommandInteraction,
+                    inter: disnake.ApplicationCommandInteraction,
                     wip: Wip,
                     user: Optional[disnake.Member] = None):
         """
@@ -109,7 +106,7 @@ class WipCog(commands.Cog):
     @error_handler
     @_wip_wrapper
     async def title(self,
-                    inter: disnake.AppCommandInteraction,
+                    inter: disnake.ApplicationCommandInteraction,
                     wip: Wip,
                     title: str):
         """
@@ -128,9 +125,9 @@ class WipCog(commands.Cog):
     @error_handler
     @_wip_wrapper
     async def progress(self,
-                       inter: disnake.AppCommandInteraction,
+                       inter: disnake.ApplicationCommandInteraction,
                        wip: Wip,
-                       progress: commands.Range(int, 0, 100)):
+                       progress: commands.Range[int, 0, 100]):
         """
         Updates a song's progress across Discord and SoundCloud.
 
@@ -189,7 +186,7 @@ class WipCog(commands.Cog):
     async def link_soundcloud(self,
                               inter: disnake.ApplicationCommandInteraction,
                               user: disnake.User):
-        response = await modal.send_modal(
+        response = await send_modal(
             inter, ephemeral=True,
             title=f"Link {user.name}'s SoundCloud",
             components=[disnake.ui.TextInput(

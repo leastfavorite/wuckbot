@@ -1,6 +1,7 @@
 import disnake
 from types import SimpleNamespace
 from secrets import token_hex
+from typing import Optional
 
 async def send_modal(inter: disnake.ApplicationCommandInteraction,
                      *args, ephemeral: bool = True, **kwargs):
@@ -17,3 +18,16 @@ async def send_modal(inter: disnake.ApplicationCommandInteraction,
     inter.response = modal_inter.response
     inter.followup = modal_inter.followup
     return SimpleNamespace(**modal_inter.text_values)
+
+def get_audio_attachment(message: disnake.Message) -> Optional[disnake.Attachment]:
+    if not message.attachments:
+        return None
+
+    attachment = message.attachments[0]
+    if not attachment.content_type:
+        return None
+
+    if attachment.content_type.startswith('audio'):
+        return attachment
+
+    return None

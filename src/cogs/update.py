@@ -3,12 +3,9 @@ import disnake
 
 import asyncio
 
-from util.wip import Wip, Update
-from util.decorators import UserError
-from util import embeds
-
-from util.json import State
-from util import soundcloud
+from utils import UserError, embeds, get_audio_attachment
+from datatypes import Wip, Update, State
+import soundcloud
 
 UPDATE_REACTION = "\N{BELL}"
 
@@ -19,27 +16,30 @@ STATE_MANIFEST = {
 
 class UpdateCog(commands.Cog):
     def __init__(self,
-                 bot: commands.InteractionBot, sc: soundcloud.SoundCloud):
+                 bot: commands.InteractionBot, sc: soundcloud.Client):
         self.bot = bot
         self.sc = sc
         self.update_lock = asyncio.Lock()
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: disnake.Message):
-        # don't worry about bot messages
+        # if a guild message is sent
+        if not message.guild:
+            return
+
+        # by someone else
         if message.author == message.guild.me:
             return
 
-        # don't worry about messages without audio attachments
-        if len(message.attachments) == 0 or \
-                not message.attachments[0].content_type.startswith("audio"):
+        # with an audio attachment
+        if not get_audio_attachment(message):
             return
 
-        # don't worry about messages outside a WIP channel
-        wip = disnake.utils.get(State().wips, channel__id=message.channel.id)
-        if wip is None:
+        # in a wip channel
+        if not disnake.utils.get(State().wips, channel__id=message.channel.id):
             return
 
+        # react with a bell!
         await message.add_reaction(UPDATE_REACTION)
 
     @commands.Cog.listener("on_raw_reaction_add")
@@ -54,38 +54,42 @@ class UpdateCog(commands.Cog):
             return
 
         # in a wip channel
-        wip: Wip = disnake.utils.get(State().wips, channel__id=e.channel_id)
+        wip = disnake.utils.get(State().wips, channel__id=e.channel_id)
         if wip is None:
             return
 
         # with an audio attachment
         msg: disnake.Message = await wip.channel.fetch_message(e.message_id)
-        if len(msg.attachments) == 0 or \
+        if not msg.attachments or \
+                not msg.attachments[0].content_type or \
                 not msg.attachments[0].content_type.startswith("audio"):
             return
 
         # by someone the webcage role
         author = await wip.channel.guild.get_or_fetch_member(e.user_id)
-        if disnake.utils.get(author.roles, name="webcage") is None:
+        if not author or \
+                disnake.utils.get(author.roles, name="webcage") is None:
             return
 
         async with self.update_lock:
 
             # and we haven't updated with this message before
-            if disnake.utils.get(wip.updates, file__id=msg.id):
+            if wip.update \
+                    and wip.update.file \
+                    and wip.update.file.id == msg.id:
                 return
 
             # and they don't un-react within 3 seconds
             async with wip.channel.typing():
                 await asyncio.sleep(3)
                 bells = disnake.utils.get(msg.reactions, emoji=UPDATE_REACTION)
-                print(bells.count)
-                if bells.count < 2:
+                if not bells or bells.count < 2:
                     return
 
             # update
             await self.create_update(author=author, file_msg=msg, wip=wip)
 
+    # TODO update to new error handler
     async def create_update(self,
                             author: disnake.Member,
                             file_msg: disnake.Message,
@@ -175,11 +179,11 @@ class UpdateCog(commands.Cog):
             await updates_channel.send(file=file)
 
             # save!
-            wip.updates.append(Update(
+            wip.update = Update(
                 file=file_msg,
                 update=update_msg,
                 timestamp=disnake.utils.utcnow()
-            ))
+            )
 
             # update pinned
             await wip.update_pinned()

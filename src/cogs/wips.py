@@ -3,11 +3,8 @@ import disnake
 
 from typing import Optional
 
-from util.wip import Wip
-from util.decorators import error_handler, UserError
-from util import embeds
-
-from util.json import State
+from utils import error_handler, UserError, embeds
+from datatypes import Wip, State
 
 STATE_MANIFEST = {
     "wips": list[Wip]
@@ -25,7 +22,7 @@ class WipsCog(commands.Cog):
         pass
 
     @wips.sub_command()
-    @error_handler
+    @error_handler()
     async def viewall(self, inter: disnake.AppCommandInteraction):
         """
         Toggles access to all WIP channels.
@@ -47,7 +44,7 @@ class WipsCog(commands.Cog):
                     "You are now viewing all WIPs."))
 
     @commands.Cog.listener("on_button_click")
-    @error_handler
+    @error_handler()
     async def on_button_click(self, inter: disnake.MessageInteraction):
         if inter.component.custom_id.startswith("wips_view_"):
             c_id = inter.component.custom_id.removeprefix("wips_view_")
@@ -124,7 +121,7 @@ class WipsCog(commands.Cog):
         ]
 
     @wips.sub_command()
-    @error_handler
+    @error_handler()
     async def view(
             self,
             inter: disnake.AppCommandInteraction,
@@ -160,7 +157,7 @@ class WipsCog(commands.Cog):
         return [name for name in wips if user_input.lower() in name.lower()]
 
     @wips.sub_command()
-    @error_handler
+    @error_handler()
     async def join(
             self,
             inter: disnake.AppCommandInteraction,
