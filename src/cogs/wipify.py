@@ -1,9 +1,9 @@
 import disnake
 from disnake.ext import commands
 
-from utils import embeds, send_modal, error_handler, UserError, get_audio_attachment
-from datatypes import Wip
-import soundcloud
+from ..utils import embeds, buttons, send_modal, error_handler, UserError, get_audio_attachment
+from ..datatypes import Wip
+from .. import soundcloud
 
 
 STATE_MANIFEST = {
@@ -98,6 +98,7 @@ class WipifyCog(commands.Cog):
             track = await self.sc.resolve(modal.soundcloud)
             if type(track) is not soundcloud.Track:
                 track = None
+        assert(track is None or isinstance(track, soundcloud.Track))
 
         # create WIP
         await Wip.from_channel(
@@ -181,8 +182,4 @@ class WipifyCog(commands.Cog):
 
         await inter.followup.send(
             embed=embed,
-            components=[disnake.ui.Button(
-                label="Join WIP",
-                emoji="\N{MICROPHONE}",
-                style=disnake.ButtonStyle.primary,
-                custom_id=f"wip_join_{wip.channel.id}")])
+            components=[buttons.wip_join(wip)])

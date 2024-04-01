@@ -41,7 +41,7 @@ class UserSerializer(Serializer[disnake.abc.User]):
         return issubclass(Target, disnake.User)
 
     async def serialize(self, obj: disnake.abc.User, _) -> Optional[Serializable]:
-        if isinstance(obj, (disnake.User, disnake.Member, disnake.ClientUser)):
+        if isinstance(obj, disnake.abc.User):
             return obj.id
         return None
 

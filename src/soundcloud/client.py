@@ -133,8 +133,9 @@ class Client:
         return await self.routes["fetch_track"].run(
             s_id=s_id, secret_token=secret_token)
 
-    async def fetch_playlist(self, s_id: int) -> Playlist:
+    async def fetch_playlist(self, s_id: int, secret_token: Optional[str] = None) -> Playlist:
         raise NotImplementedError("fetch_playlist")
 
     async def fetch_user(self, s_id: int) -> User:
+        return await self.routes["fetch_user"].run(s_id=s_id)
         raise NotImplementedError("fetch_user")

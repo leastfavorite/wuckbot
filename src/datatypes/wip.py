@@ -1,26 +1,31 @@
-from validator import TypedDict, without, default
 import disnake
 import asyncio
 from typing import Optional, Annotated, Union
 from datetime import datetime
 
-from utils.errors import error_handler, UserError, send_error
-from utils import embeds, buttons, get_audio_attachment
-
-from .files import State
-
-import soundcloud
+from ..validator import TypedDict, without, default
+from ..utils.errors import UserError, send_error
+from ..utils import embeds, buttons, get_audio_attachment
+from .. import soundcloud, state
 
 class Update(TypedDict):
     # TODO: check after implementation if this actually matters
     file: Optional[disnake.Message] = None
-    track: soundcloud.Track
     message: disnake.Message
     timestamp: datetime
 
+    # TODO
+    @without("message")
+    async def without_message(self):
+        pass
+
+    @without("track")
+    async def without_track(self):
+        pass
+
 class Credit(TypedDict):
-    producers: Annotated[list[disnake.abc.User], list]
-    vocalists: Annotated[list[disnake.abc.User], list]
+    producers: Annotated[list[disnake.User], list]
+    vocalists: Annotated[list[disnake.User], list]
 
 class Wip(TypedDict):
     # metadata
@@ -34,17 +39,15 @@ class Wip(TypedDict):
     role: disnake.Role
     pinned: disnake.Message
 
+    track: Optional[soundcloud.Track] = None
+
     # most recent update (if it exists)
     update: Optional[Update] = None
-
-    # track
-    track: soundcloud.Track
 
     # timestamp
     timestamp: Annotated[datetime, disnake.utils.utcnow]
 
     @without("guild")
-    @error_handler()
     async def without_guild(self):
         raise TypeError("Guild not provided in WIP. Maybe I got kicked?")
 
@@ -58,8 +61,7 @@ class Wip(TypedDict):
         if self.role:
             await self.role.delete()
 
-        embed = embeds.error(
-            msg="Please don't delete WIP channels. If you don't want to work "
+        embed = embeds.error( msg="Please don't delete WIP channels. If you don't want to work "
                 "on a song anymore, use `/archive` instead.",
             title=f"WIP Channel '{self.name}' Deleted")
 
@@ -116,7 +118,7 @@ class Wip(TypedDict):
 
     @staticmethod
     def _validate_name(name: str, guild: disnake.Guild):
-        if disnake.utils.get(State().wips, name=name) is not None:
+        if disnake.utils.get(state().wips, name=name) is not None:
             raise UserError(
                 f"Another WIP already uses the name \"{name}\".")
 
@@ -161,7 +163,7 @@ class Wip(TypedDict):
         progress = cls._validate_progress(progress)
 
         if existing_channel:
-            if disnake.utils.get(State().wips, channel=existing_channel):
+            if disnake.utils.get(state().wips, channel=existing_channel):
                 raise UserError("This channel is already a WIP.")
 
         # get WIPs category
@@ -231,8 +233,8 @@ class Wip(TypedDict):
             guild=guild,
             channel=channel,
             role=new_role)
-        State().wips.append(wip)
-        await State().save()
+        state().wips.append(wip)
+        await state().save()
 
         return wip
 
@@ -282,8 +284,8 @@ class Wip(TypedDict):
 
         # set up credit
         if show_help:
-            vocalists = "nobody (try `/wip credit vocalist`)"
-            producers = "nobody (try `/wip credit producer`)"
+            vocalists = "nobody\n(try `/wip credit vocalist`)"
+            producers = "nobody\n(try `/wip credit producer`)"
         else:
             vocalists = "nobody"
             producers = "nobody"
@@ -303,10 +305,10 @@ class Wip(TypedDict):
 
         # create links
         links = []
-        if self.track:
-            links.append(f"[soundcloud]({self.track.url})")
         if self.update:
             links.append(f"[last update]({self.update.message.jump_url})")
+        if self.track:
+            links.append(f"[soundcloud]({self.track.url})")
 
         if links:
             embed.add_field(
@@ -315,14 +317,16 @@ class Wip(TypedDict):
         return embed
 
     def soundcloud_description(self):
+        linked_users = {x.discord: x.sc for x in state().links}
+
         vocalists = self.credit.vocalists
-        vocalists = (v for v in vocalists if v in State().soundclouds)
-        vocalists = ["@" + State().soundclouds[v].permalink for v in vocalists]
+        vocalists = (v for v in vocalists if v in linked_users)
+        vocalists = ["@" + linked_users[v].permalink for v in vocalists]
         vocalists = vocalists or ["nobody"]
 
         producers = self.credit.producers
-        producers = (p for p in producers if p in State().soundclouds)
-        producers = ["@" + State().soundclouds[p].permalink for p in producers]
+        producers = (p for p in producers if p in linked_users)
+        producers = ["@" + linked_users[p].permalink for p in producers]
         producers = producers or ["nobody"]
 
         return "\n".join(
@@ -330,7 +334,7 @@ class Wip(TypedDict):
 
     def unlinked_members(self):
         members = set(*self.credit.vocalists, *self.credit.producers)
-        linked = set(State().soundclouds.keys())
+        linked = set(x.discord for x in state().links)
         return members - linked
 
     async def edit(self, *,

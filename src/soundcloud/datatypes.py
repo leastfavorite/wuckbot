@@ -1,5 +1,5 @@
 from typing import Optional, TYPE_CHECKING
-from validator import Serializable
+from ..validator import Serializable
 
 if TYPE_CHECKING:
     from .client import Client
@@ -15,7 +15,7 @@ MONETIZATION_ARGS: Serializable = {
 }
 
 class ScObject:
-    def __init__(self, sc: Client, *,
+    def __init__(self, sc: 'Client', *,
                  id: int, permalink_url: str, permalink: str, **_):
         self.sc = sc
         self.s_id = id

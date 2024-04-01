@@ -18,10 +18,9 @@ class JsonFileMeta(TypedDictMeta):
         return cls._instances[cls]
 
 
-def _json_file_save(filename, backups_folder, registrar):
+def _json_file_save(self, filename, backups_folder, registrar):
 
     def _make_backup(backup_count: int = 10):
-
         if backup_count <= 0:
             return
 
@@ -63,14 +62,14 @@ def _json_file_save(filename, backups_folder, registrar):
         for old_backup in backups[backup_count-1:]:
             old_backup.unlink()
 
-    async def save(self, backup_count: int = 10):
+    async def save(backup_count: int = 10):
         serialized = await registrar.serialize(self, type(self))
         if not serialized:
             raise RuntimeError(f"Could not save {type(self).__qualname__}")
 
         _make_backup(backup_count)
 
-        with self.filename.open("w") as fp:
+        with filename.open("w") as fp:
             json.dump(serialized, fp, indent=2)
 
     return save
@@ -110,7 +109,7 @@ class JsonFile(TypedDict, metaclass=JsonFileMeta):
                 f"{cls.__qualname__} couldn't be resolved from {filename}.")
 
         setattr(instance, 'save',
-                _json_file_save(filename, backups_folder, registrar))
+                _json_file_save(instance, filename, backups_folder, registrar))
         backups_folder.mkdir(parents=True, exist_ok=True)
 
         return instance

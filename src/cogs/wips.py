@@ -3,13 +3,9 @@ import disnake
 
 from typing import Optional
 
-from utils import error_handler, UserError, embeds
-from datatypes import Wip, State
-
-STATE_MANIFEST = {
-    "wips": list[Wip]
-}
-
+from ..utils import error_handler, UserError, embeds, buttons
+from ..datatypes import Wip
+from .. import state
 
 class WipsCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
@@ -43,81 +39,20 @@ class WipsCog(commands.Cog):
                 ephemeral=True, embed=embeds.success(
                     "You are now viewing all WIPs."))
 
-    @commands.Cog.listener("on_button_click")
-    @error_handler()
-    async def on_button_click(self, inter: disnake.MessageInteraction):
-        if inter.component.custom_id.startswith("wips_view_"):
-            c_id = inter.component.custom_id.removeprefix("wips_view_")
-
-            followup = None
-            # toggle: toggle join/leave
-            if c_id.startswith("toggle_"):
-                index, channel_id = \
-                    [int(x) for x in c_id.removeprefix("toggle_").split("_")]
-
-                wip = disnake.utils.get(State().wips, channel__id=channel_id)
-                if not wip:
-                    raise UserError("Could not find this WIP.")
-                if wip.role in inter.author.roles:
-                    await inter.author.remove_roles(wip.role)
-                else:
-                    await inter.author.add_roles(wip.role)
-                    followup = f"You have been added to {wip.channel.mention}."
-
-            elif c_id.startswith("move_"):
-                index = int(c_id.removeprefix("move_"))
-
-            else:
-                raise UserError(
-                    "You pressed an unknown button, somehow. What?")
-
-            kwargs = {
-                "embed": State().wips[index].view_embed(),
-                "components": self.get_view_components(inter.author, index)
-            }
-            await inter.response.edit_message(**kwargs)
-
-            if followup:
-                await inter.followup.send(ephemeral=True,
-                                          embed=embeds.success(followup))
-
     @staticmethod
     async def view_autocomplete(inter: disnake.AppCommandInteraction,
                                 user_input: str):
-        wips = [wip.name for wip in State().wips]
+        wips = [wip.name for wip in state().wips]
         return [name for name in wips if user_input.lower() in name.lower()]
 
     def get_view_components(self, author: disnake.Member, index: int):
-        wip: Wip = State().wips[index]
-        num_wips = len(State().wips)
-        join_wip_button = disnake.ui.Button(
-            label="Leave",
-            emoji="\N{DASH SYMBOL}",
-            style=disnake.ButtonStyle.danger,
-            custom_id=f"wips_view_toggle_{index}_{wip.channel.id}"
-        )
-        if wip.role not in author.roles:
-            join_wip_button = disnake.ui.Button(
-                label="Join",
-                emoji="\N{MICROPHONE}",
-                style=disnake.ButtonStyle.primary,
-                custom_id=f"wips_view_toggle_{index}_{wip.channel.id}"
-            )
+        wip: Wip = state().wips[index]
+        num_wips = len(state().wips)
 
         return [
-            disnake.ui.Button(
-                emoji="\N{BLACK LEFT-POINTING DOUBLE TRIANGLE}",
-                disabled=(index == 0),
-                style=disnake.ButtonStyle.secondary,
-                custom_id=f"wips_view_move_{index - 1}"
-            ),
-            join_wip_button,
-            disnake.ui.Button(
-                emoji="\N{BLACK RIGHT-POINTING DOUBLE TRIANGLE}",
-                disabled=(index == num_wips - 1),
-                style=disnake.ButtonStyle.secondary,
-                custom_id=f"wips_view_move_{index + 1}"
-            )
+            buttons.wip_view_prev(index - 1),
+            buttons.wip_toggle(wip, author),
+            buttons.wip_view_next(index + 1)
         ]
 
     @wips.sub_command()
@@ -136,12 +71,12 @@ class WipsCog(commands.Cog):
         wip: The WIP to view. Defaults to the newest one.
         """
         if wip:
-            index = [wip.name.lower() for wip in State().wips].index(
+            index = [wip.name.lower() for wip in state().wips].index(
                 wip.lower())
         else:
-            index = len(State().wips) - 1
+            index = len(state().wips) - 1
 
-        wip = State().wips[index]
+        wip = state().wips[index]
         await inter.response.send_message(
             ephemeral=True,
             embed=wip.view_embed(),
@@ -152,7 +87,7 @@ class WipsCog(commands.Cog):
                                 user_input: str):
         # only get WIPs the author is not in
         roles = inter.author.roles
-        wips = [wip.name for wip in State().wips if wip.role not in roles]
+        wips = [wip.name for wip in state().wips if wip.role not in roles]
 
         return [name for name in wips if user_input.lower() in name.lower()]
 
@@ -169,13 +104,13 @@ class WipsCog(commands.Cog):
         ----------
         wip: The WIP to join.
         """
-        wip = disnake.utils.get(State().wips, name=wip)
-        if wip is None:
+        real_wip = disnake.utils.get(state().wips, name=wip)
+        if real_wip is None:
             raise UserError("Could not find that WIP.")
-        if wip.role in inter.author.roles:
+        if real_wip.role in inter.author.roles:
             raise UserError("You're already in that WIP!")
-        await inter.author.add_roles(wip.role)
+        await inter.author.add_roles(real_wip.role)
         await inter.response.send_message(
             ephemeral=True, embed=embeds.success(
-                f"You have been added to {wip.channel.mention}.\n"
+                f"You have been added to {real_wip.channel.mention}.\n"
                 f"Use `/wip leave from within the channel to leave."))

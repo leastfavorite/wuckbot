@@ -1,6 +1,8 @@
-from validator import JsonFile, TypedDict
-from typing import Annotated
+from typing import Annotated, TYPE_CHECKING
 import disnake
+
+from ..validator import JsonFile, TypedDict
+from .. import soundcloud
 
 from .wip import Wip
 

@@ -12,12 +12,12 @@ class IdentitySerializer(Serializer[Serializable]):
     def supports(self, Target: type) -> bool:
         return Target in [str, int, float, bool, None, type(None)]
 
-    def serialize(self, obj: Serializable, Target: type):
+    async def serialize(self, obj: Serializable, Target: type):
         if isinstance(obj, Target):
             return obj
         return None
 
-    def deserialize(self, obj: Serializable, Target: type):
+    async def deserialize(self, obj: Serializable, Target: type):
         if isinstance(obj, Target):
             return obj
         return None
@@ -55,10 +55,10 @@ class TupleSerializer(Serializer[tuple]):
         InnerType = typing.get_args(Target)[0]
         serialized = await asyncio.gather(
             *(self.serialize_type(x, InnerType) for x in obj))
-        return list(*serialized)
+        return list(serialized)
 
     async def deserialize(self, obj: Serializable, Target: Type[tuple]) -> Optional[tuple]:
-        if not isinstance(obj, tuple):
+        if not isinstance(obj, list):
             return None
 
         InnerType = typing.get_args(Target)[0]
@@ -137,6 +137,7 @@ def base_serializers() -> list[Serializer]:
         IdentitySerializer(),
         ListSerializer(),
         TupleSerializer(),
+        DatetimeSerializer(),
         DictSerializer(),
         TypedDictSerializer(),
     ]

@@ -1,13 +1,20 @@
-from datatypes import Wip, State
+from typing import TYPE_CHECKING
+
+from .. import soundcloud, state
+
+if TYPE_CHECKING:
+    from ..datatypes import Wip
+
+
 import disnake
-def wip_join(wip: Wip):
+def wip_join(wip: 'Wip'):
     return disnake.ui.Button(
         label="Join",
         emoji="\N{MICROPHONE}",
         style=disnake.ButtonStyle.primary,
         custom_id=f"wipjoin|{wip.channel.id}")
 
-def wip_toggle(wip: Wip, user: disnake.User):
+def wip_toggle(wip: 'Wip', user: disnake.Member):
     in_wip = wip.role in user.roles
 
     if in_wip:
@@ -31,7 +38,7 @@ def wip_view_prev(index: int):
         custom_id=f"wipview|{index}")
 
 def wip_view_next(index: int):
-    num_wips = len(State().wips)
+    num_wips = len(state().wips)
     return disnake.ui.Button(
         emoji="\N{BLACK RIGHT-POINTING DOUBLE TRIANGLE}",
         disabled=(index >= num_wips),

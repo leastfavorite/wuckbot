@@ -3,9 +3,10 @@ import disnake
 
 import asyncio
 
-from utils import UserError, embeds, get_audio_attachment
-from datatypes import Wip, Update, State
-import soundcloud
+from ..utils import UserError, embeds, buttons, get_audio_attachment
+from ..datatypes import Wip, Update
+from ..filemethods import state
+from .. import soundcloud
 
 UPDATE_REACTION = "\N{BELL}"
 
@@ -36,7 +37,7 @@ class UpdateCog(commands.Cog):
             return
 
         # in a wip channel
-        if not disnake.utils.get(State().wips, channel__id=message.channel.id):
+        if not disnake.utils.get(state().wips, channel__id=message.channel.id):
             return
 
         # react with a bell!
@@ -54,7 +55,7 @@ class UpdateCog(commands.Cog):
             return
 
         # in a wip channel
-        wip = disnake.utils.get(State().wips, channel__id=e.channel_id)
+        wip = disnake.utils.get(state().wips, channel__id=e.channel_id)
         if wip is None:
             return
 
@@ -160,17 +161,8 @@ class UpdateCog(commands.Cog):
             update_msg = await updates_channel.send(
                 embed=embed,
                 components=[
-                    # handled by wip.py
-                    disnake.ui.Button(
-                        label="Join WIP",
-                        emoji="\N{MICROPHONE}",
-                        style=disnake.ButtonStyle.primary,
-                        custom_id=f"wip_join_{wip.channel.id}"),
-                    disnake.ui.Button(
-                        label="SoundCloud",
-                        emoji="\N{SPEAKER WITH THREE SOUND WAVES}",
-                        style=disnake.ButtonStyle.link,
-                        url=wip.track.url)
+                    buttons.wip_join(wip),
+                    buttons.track_link(wip.track)
                 ]
             )
 

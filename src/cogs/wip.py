@@ -1,25 +1,21 @@
 import disnake
+import asyncio
 from disnake.ext import commands
 
-from utils import embeds, error_handler, UserError, send_modal
-from datatypes import Wip, State
-import soundcloud
+from ..utils import embeds, error_handler, UserError, send_modal
+from ..datatypes import Wip, LinkedUser
+from .. import soundcloud, state
 
 from typing import Optional
 from functools import wraps
 
 from inspect import signature
 
-STATE_MANIFEST = {
-    "wips": list[Wip]
-}
-
-
 def _wip_wrapper(f):
     @wraps(f)
     async def _inner(self, inter: disnake.ApplicationCommandInteraction,
                      *args, **kwargs):
-        wip = disnake.utils.get(State().wips, channel=inter.channel)
+        wip = disnake.utils.get(state().wips, channel=inter.channel)
         if wip is None:
             raise UserError("You are not in a WIP channel.")
         return await f(self, inter, wip, *args, **kwargs)
@@ -49,7 +45,7 @@ class WipCog(commands.Cog):
         pass
 
     @wip.sub_command()
-    @error_handler
+    @error_handler()
     @_wip_wrapper
     async def join(self,
                    inter: disnake.ApplicationCommandInteraction,
@@ -73,7 +69,7 @@ class WipCog(commands.Cog):
             ))
 
     @wip.sub_command()
-    @error_handler
+    @error_handler()
     @_wip_wrapper
     async def leave(self,
                     inter: disnake.ApplicationCommandInteraction,
@@ -103,7 +99,7 @@ class WipCog(commands.Cog):
             ))
 
     @wip.sub_command()
-    @error_handler
+    @error_handler()
     @_wip_wrapper
     async def title(self,
                     inter: disnake.ApplicationCommandInteraction,
@@ -122,7 +118,7 @@ class WipCog(commands.Cog):
             f"Title successfully changed to \"{title}\"."))
 
     @wip.sub_command()
-    @error_handler
+    @error_handler()
     @_wip_wrapper
     async def progress(self,
                        inter: disnake.ApplicationCommandInteraction,
@@ -141,7 +137,7 @@ class WipCog(commands.Cog):
             f"Progress updated to `{progress}%`!"))
 
     @wip.sub_command()
-    @error_handler
+    @error_handler()
     @_wip_wrapper
     async def credit(self,
                      inter: disnake.ApplicationCommandInteraction,
@@ -170,7 +166,7 @@ class WipCog(commands.Cog):
                 response = f"You have been removed as a {credit_type}."
         else:
             # check if soundcloud is available
-            if user not in State().soundclouds:
+            if user._user not in (x.discord for x in state().links):
                 await self.link_soundcloud(inter, user)
 
             credit_list.append(user)
@@ -185,7 +181,7 @@ class WipCog(commands.Cog):
 
     async def link_soundcloud(self,
                               inter: disnake.ApplicationCommandInteraction,
-                              user: disnake.User):
+                              user: disnake.abc.User):
         response = await send_modal(
             inter, ephemeral=True,
             title=f"Link {user.name}'s SoundCloud",
@@ -201,20 +197,18 @@ class WipCog(commands.Cog):
         if type(sc_user) is not soundcloud.User:
             raise UserError("Could not resolve the provided link.")
 
-        # we need to map the underlying user,
-        # people will have the same sc accounts no matter which
-        # server
-        if type(user) is disnake.Member:
-            State().soundclouds[user._user] = sc_user
-        else:
-            State().soundclouds[user] = sc_user
+        state().links = [x for x in state().links if x.discord != user]
+        discord_user = \
+            user._user if isinstance(user, disnake.Member) else user
+        state().links.append(
+            await LinkedUser.create(discord=discord_user, sc=sc_user))
 
         return sc_user
 
     @commands.slash_command(
         dm_permission=False,
         default_member_permissions=disnake.Permissions.none())
-    @error_handler
+    @error_handler()
     async def linksc(self, inter: disnake.ApplicationCommandInteraction,
                      user: Optional[disnake.User] = None):
         """

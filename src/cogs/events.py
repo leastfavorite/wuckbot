@@ -1,9 +1,8 @@
 from disnake.ext import commands
 import disnake
 
-from datatypes import State
-from utils import error_handler, UserError, embeds, buttons
-import soundcloud
+from ..utils import error_handler, UserError, embeds, buttons
+from .. import soundcloud, state
 
 class EventCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot, sc: soundcloud.Client):
@@ -35,7 +34,7 @@ class EventCog(commands.Cog):
                               inter: disnake.MessageInteraction,
                               channel_id: int):
 
-        wip = disnake.utils.get(State().wips, channel__id=channel_id)
+        wip = disnake.utils.get(state().wips, channel__id=channel_id)
         if not wip:
             raise UserError("This WIP no longer exists.")
 
@@ -57,13 +56,13 @@ class EventCog(commands.Cog):
                                 index: int):
 
         # keep index within bounds
-        num_wips = len(State().wips)
+        num_wips = len(state().wips)
         if index < 0:
             index = 0
         if index >= num_wips:
             index = num_wips - 1
 
-        wip = State().wips[index]
+        wip = state().wips[index]
 
         # add to WIP
         if wip.role in inter.author.roles:
@@ -74,14 +73,21 @@ class EventCog(commands.Cog):
             followup = f"You have been added to {wip.channel.mention}."
 
         # update components
-        msg = await inter.original_response()
-        comp = msg.components
-        indices = [i for (i, c) in enumerate(comp)
-                   if c.custom_id.startswith("wiptoggle")]
-        for i in indices:
-            comp[i] = buttons.wip_toggle(wip, inter.author)
+        components = inter.message.components
 
-        await inter.response.edit_message(components=comp)
+        def replace_component(component):
+            if component.custom_id.startswith("wiptoggle"):
+                return buttons.wip_toggle(wip, inter.author)
+            else:
+                if component.type != disnake.ComponentType.button:
+                    raise NotImplementedError(
+                        "wip toggle is not powerful enough!")
+                return disnake.ui.Button.from_component(component)
+
+        components = [[
+            replace_component(c) for c in row.children] for row in components]
+
+        await inter.response.edit_message(components=components)
         await inter.followup.send(ephemeral=True,
                                   embed=embeds.success(followup))
 
@@ -89,13 +95,13 @@ class EventCog(commands.Cog):
                               inter: disnake.MessageInteraction,
                               index: int):
         # keep index within bounds
-        num_wips = len(State().wips)
+        num_wips = len(state().wips)
         if index < 0:
             index = 0
         if index >= num_wips:
             index = num_wips - 1
 
-        wip = State().wips[index]
+        wip = state().wips[index]
 
         components = [
             buttons.wip_view_prev(index - 1),
@@ -133,13 +139,83 @@ class EventCog(commands.Cog):
                 f"`{title}` from SoundCloud.")
         )
 
-    # TODO:
-
     # channel remove (check if wip)
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def on_channel_remove(self, channel: disnake.abc.GuildChannel):
+        wip = disnake.utils.get(state().wips, channel=channel)
+        if not wip:
+            return
+        assert(isinstance(channel, disnake.TextChannel))
+
+        await wip.without_channel()
+        state().wips = [wip for wip in state().wips if wip.channel != channel]
+
     # role remove (check if wip)
+    @commands.Cog.listener("on_guild_role_delete")
+    async def on_role_remove(self, role: disnake.Role):
+        wip = disnake.utils.get(state().wips, role=role)
+        if not wip:
+            return
+
+        await wip.reconstruct_role()
+
     # channel name change (check if wip)
+    @commands.Cog.listener("on_guild_channel_update")
+    async def on_channel_update(self, channel: disnake.abc.GuildChannel):
+        wip = disnake.utils.get(state().wips, channel=channel)
+        if not wip:
+            return
+        assert(isinstance(channel, disnake.TextChannel))
+
+        if channel.name != wip._get_channel_name(wip.name, wip.progress):
+            await wip.edit()
+
     # user leaves (check if credited)
+    @commands.Cog.listener("on_raw_member_remove")
+    async def on_member_remove(self, evt: disnake.RawGuildMemberRemoveEvent):
+        user = evt.user if isinstance(evt.user, disnake.User) else evt.user._user
+        if not user.mutual_guilds:
+            for wip in state().wips:
+                needs_update = False
+
+                if user in wip.credit.producers:
+                    wip.credit.producers.remove(user)
+                    needs_update = True
+
+                if user in wip.credit.vocalists:
+                    wip.credit.vocalists.remove(user)
+                    needs_update = True
+
+                if needs_update:
+                    embed = disnake.Embed(
+                        color=disnake.Color.blurple(),
+                        title="User left the server",
+                        description=
+                            f"The user `{user.name}` has left the server. "
+                            "Since this bot has no way to store information "
+                            "about users outside the server, their credit "
+                            "on this song has been removed.")
+
+                    embed.set_footer(icon_url=embeds.WUCK,
+                                     text=embeds.success().footer.text)
+                    await wip.channel.send(embed=embed)
+                    await wip.edit()
+
+        state().links = [x for x in state().links if x.discord != user]
+
     # message deleted (check if pinned)
     # message deleted (check if most recent update)
+    @commands.Cog.listener("on_raw_message_delete")
+    async def on_message_delete(self, evt: disnake.RawMessageDeleteEvent):
+        pinned_wip = disnake.utils.get(state().wips, pinned__id=evt.message_id)
+        update_wip = disnake.utils.get(
+            state().wips, update__message__id=evt.message_id)
 
-    # integration, baby!!
+        if pinned_wip:
+            await pinned_wip.update_pinned()
+
+        if update_wip:
+            update_wip.update = None
+            await update_wip.edit()
+
+    # integration, baby!

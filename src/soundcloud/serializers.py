@@ -1,9 +1,9 @@
-from validator import Serializer, Serializable
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 from .client import Client
-from .datatypes import User, Track, Playlist, Union
+from .datatypes import User, Track, Playlist
+from ..validator import Serializer, Serializable
 
 from aiohttp import ClientResponseError
 
@@ -34,14 +34,14 @@ class TrackOrPlaylistSerializer(Serializer[Union[Track, Playlist]]):
     def supports(self, Target: type) -> bool:
         return issubclass(Target, Playlist) or issubclass(Target, Track)
 
-    async def serialize(self, obj: Playlist, _) -> Optional[Serializable]:
+    async def serialize(self, obj: Union[Track, Playlist], _) -> Optional[Serializable]:
         if not isinstance(obj, Playlist) and not isinstance(obj, Track):
             return None
         if obj.secret_token:
             return f"{obj.s_id}|{obj.secret_token}"
         return f"{obj.s_id}"
 
-    async def deserialize(self, obj: Serializable, Target: type) -> Optional[Playlist]:
+    async def deserialize(self, obj: Serializable, Target: type) -> Optional[Union[Track, Playlist]]:
         if not isinstance(obj, str):
             return None
 

@@ -1,6 +1,5 @@
 import disnake
-from datatypes import Secrets
-from typing import Optional
+from typing import Optional, Any
 from functools import wraps
 
 import inspect
@@ -9,6 +8,10 @@ import traceback
 import asyncio
 
 from .embeds import error, success, WUCK
+
+def Secrets():
+    from ..datatypes import Secrets
+    return Secrets()
 
 __all__ = [
     'UserError',
@@ -35,9 +38,9 @@ class UserSuccess(Exception):
 async def send_exception_embed(
         e: Exception, guild: Optional[disnake.Guild] = None,
         author: Optional[disnake.User] = None, command: Optional[str] = None,
-        suppress = (asyncio.TimeoutError,)) -> disnake.Embed:
+        suppress = (asyncio.TimeoutError,)):
 
-    tb_text = traceback.format_tb(e.__traceback__)
+    tb_text = "".join(traceback.format_exception(e))
 
     embed = disnake.Embed(
         color=disnake.Color.red(),
@@ -80,23 +83,21 @@ async def send_exception_embed(
 async def exc_embed(e: Exception,
                  guild: Optional[disnake.Guild] = None,
                  author: Optional[disnake.User] = None,
-                 command: Optional[str] = None,
-                 suppress=(asyncio.TimeoutError,)) -> Optional[disnake.Embed]:
-    if issubclass(e, UserError):
+                 command: Optional[str] = None) -> Optional[disnake.Embed]:
+    if isinstance(e, UserError):
         return error(e.args[0])
-    if issubclass(e, UserSuccess):
+    if isinstance(e, UserSuccess):
         return success(e.args[0])
-    for exc_type in suppress:
-        if issubclass(e, suppress):
-            return None
-    await send_exception_embed(e)
+    if isinstance(e, asyncio.TimeoutError):
+        return None
+    await send_exception_embed(e, guild=guild, author=author, command=command)
     return error(
         "An unknown error has occured. An admin has been notified.")
 
 def error_handler(ephemeral: bool = True):
     def _deco(f):
         @wraps(f)
-        async def _inner(*args, **kwargs):
+        async def _inner(*args: Any, **kwargs):
             sig = inspect.signature(f)
             bound_args = sig.bind(*args, **kwargs)
             bound_args.apply_defaults()
@@ -124,6 +125,8 @@ def error_handler(ephemeral: bool = True):
                 # exc_embed will send an exception embed if necessary
                 if first_arg is None:
                     await exc_embed(e)
+                    if not isinstance(e, (UserError, UserSuccess, asyncio.TimeoutError)):
+                        raise e
                     return
 
                 # try fetching this stuff
@@ -161,13 +164,13 @@ def error_handler(ephemeral: bool = True):
                     # that's awaitable and takes an embed
 
                     # first, try sending to first_arg.send
-                    if (send := hasattr(first_arg, 'send', None)) \
+                    if (send := getattr(first_arg, 'send', None)) \
                             and is_valid_response(send):
                         respond = send
 
                     # otherwise, try finding a channel first
-                    elif (channel := hasattr(first_arg, 'channel', None)):
-                        if (send := hasattr(channel, 'send', None)) \
+                    elif (channel := getattr(first_arg, 'channel', None)):
+                        if (send := getattr(channel, 'send', None)) \
                                 and is_valid_response(send):
                             respond = send
 
@@ -188,5 +191,9 @@ def error_handler(ephemeral: bool = True):
                         # sending to a deleted channel or something.
                         # we'll still get error messages forwarded
                         pass
+
+                if not isinstance(
+                        e, (UserError, UserSuccess, asyncio.TimeoutError)):
+                    raise e
         return _inner
     return _deco

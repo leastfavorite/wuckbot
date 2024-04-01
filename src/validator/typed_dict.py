@@ -1,7 +1,8 @@
 import inspect
 import asyncio
 
-from typing import Type, TypeVar, Generic, TypeAlias, Union, Optional, Callable, Awaitable, Any
+from typing import Type, TypeVar, Generic, TypeAlias, Union, Optional, Callable, Awaitable, Any, Annotated
+import typing
 from dataclasses import dataclass
 from typeguard import check_type
 
@@ -16,9 +17,10 @@ Default: TypeAlias = \
     Union[Callable[['TypedDict'], Optional[T]],
           Callable[['TypedDict'], Awaitable[Optional[T]]]]
 
-
 class MissingType:
-    pass
+    def __repr__(self):
+        return "MISSING"
+
 MISSING = MissingType()
 Maybe: TypeAlias = Union[T, MissingType]
 
@@ -40,6 +42,11 @@ def default(*names: str):
         return func
     return _inner
 
+@dataclass
+class DefaultEntry:
+    from_decorator: bool
+    f: Default
+
 class TypedDictMeta(type):
     def __new__(mcs, name, bases, attrs):
         cls = super().__new__(mcs, name, bases, attrs)
@@ -49,7 +56,7 @@ class TypedDictMeta(type):
 
         # find any fields in base classes
         for base in cls.__mro__[-1:0:-1]:
-            for field_name, field in getattr(base, "_TD_FIELDS", {}):
+            for field_name, field in getattr(base, "_TD_FIELDS", {}).items():
                 cls._TD_FIELDS[field_name] = TdField(
                     name=field.name,
                     type=field.type,
@@ -58,10 +65,26 @@ class TypedDictMeta(type):
             cls._TD_WITHOUTS.update(getattr(base, "_TD_WITHOUTS", {}))
             cls._TD_DEFAULTS.update(getattr(base, "_TD_DEFAULTS", {}))
 
+        annotateds = set()
         # find our own fields
         cls_annotations = inspect.get_annotations(cls)
         for name, type in cls_annotations.items():
+            if name in ["_TD_FIELDS", "_TD_WITHOUTS", "_TD_DEFAULTS"]:
+                continue
+
             default = getattr(cls, name, MISSING)
+
+            if typing.get_origin(type) is Annotated:
+                if default is not MISSING:
+                    raise ValueError(
+                        f"in {name}: default supplied for annotated")
+                type, default_factory = typing.get_args(type)
+                annotateds.add(name)
+                if name in cls._TD_DEFAULTS:
+                    del cls._TD_DEFAULTS[name]
+                cls._TD_DEFAULTS[name] = DefaultEntry(
+                    from_decorator=False, f=default_factory)
+
             cls._TD_FIELDS[name] = TdField(name, type, default)
 
         # find our withouts and defaults
@@ -76,10 +99,15 @@ class TypedDictMeta(type):
                     raise TypeError(
                         f"in {name}: "
                         f"{field_name} had both default and @default")
+                if field_name in annotateds:
+                    raise TypeError(
+                        f"in {name}: "
+                        f"{field_name} had both @default and annotated")
 
                 if field_name in cls._TD_DEFAULTS:
                     del cls._TD_DEFAULTS[field_name]
-                cls._TD_DEFAULTS[field_name] = attr
+                cls._TD_DEFAULTS[field_name] = DefaultEntry(
+                    from_decorator=True, f=attr)
 
         return cls
 
@@ -91,13 +119,16 @@ class TypedDictMeta(type):
         factories = {cls._TD_DEFAULTS.keys()}
         return len(needs_factory - factories) == 0
 
+Coerce: TypeAlias = Union[
+    Callable[[Any, Type[T]], Optional[T]],
+    Callable[[Any, Type[T]], Awaitable[Optional[T]]]]
 
 # TODO: __eq__, __hash__, __repr__
 class TypedDict(metaclass=TypedDictMeta):
 
     _TD_FIELDS: dict[str, TdField] = {}
     _TD_WITHOUTS: dict[str, Without] = {}
-    _TD_DEFAULTS: dict[str, Default] = {}
+    _TD_DEFAULTS: dict[str, DefaultEntry] = {}
 
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -106,17 +137,12 @@ class TypedDict(metaclass=TypedDictMeta):
     async def create(cls, **kwargs):
         return await cls._create(check_type, False, **kwargs)
 
-    Coerce: TypeAlias = Union[
-        Callable[[Any, Type[T]], Optional[T]],
-        Callable[[Any, Type[T]], Awaitable[Optional[T]]]]
-
     # a more general version of _create. allows an arbitrary
     # function to coerce input values into their required types.
     # substituting type_check for a data deserialization scheme, for instance,
     # allows us to deserialize kwargs with the same logic we use to instantiate
     @classmethod
     async def _create(cls, coerce: Coerce, run_withouts=False, /, **kwargs):
-        coerce_is_async = inspect.iscoroutinefunction(coerce)
 
         # check for extra garbage keys
         extra_keys = set(kwargs.keys()) - set(cls._TD_FIELDS.keys())
@@ -181,7 +207,7 @@ class TypedDict(metaclass=TypedDictMeta):
 
         # then: make an unsafe version of the class for withouts/default facs
         # (we have to resolve all these async args here)
-        all_nones = {k: None for k in cls._TD_FIELDS}
+        all_nones = {k: None for k in cls._TD_FIELDS if k not in init_kwargs}
         instance = cls(**all_nones, **init_kwargs)
 
         # then: if any "without"s are unaccounted for, run those.
@@ -211,13 +237,13 @@ class TypedDict(metaclass=TypedDictMeta):
             if name in init_kwargs:
                 continue
 
-            if asyncio.iscoroutinefunction(default_factory):
-                # we don't create_task here because we assume
-                # default_factories depend on previous values, and that
-                # order matters
-                result = await default_factory(instance)
+            if default_factory.from_decorator:
+                result = default_factory.f(instance)
             else:
-                result = default_factory(instance)
+                result = default_factory.f()
+
+            if asyncio.iscoroutine(result):
+                result = await result
 
             # we allow the function itself to set self.name, or we allow
             # the function to return the value as a result

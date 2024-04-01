@@ -1,6 +1,4 @@
 import disnake
-from typing import Optional
-from datetime import datetime
 # provides some common embeds
 
 # TODO selectable from config
@@ -25,3 +23,4 @@ def success(msg: str = ""):
         description=msg)
     embed.set_footer(text="\u00A9Webcage 2024-\u221E. Glory to the Company.",
                      icon_url=WUCK)
+    return embed
