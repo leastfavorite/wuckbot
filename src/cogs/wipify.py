@@ -4,11 +4,7 @@ from disnake.ext import commands
 from ..utils import embeds, buttons, send_modal, error_handler, UserError, get_audio_attachment
 from ..datatypes import Wip
 from .. import soundcloud
-
-
-STATE_MANIFEST = {
-    "wips": list[Wip]
-}
+from ..filemethods import state
 
 
 class WipifyCog(commands.Cog):
@@ -83,13 +79,16 @@ class WipifyCog(commands.Cog):
         """
         Converts the current channel into a WIP.
         """
+
+        is_sketch = bool(
+            disnake.utils.get(state().sketches, channel=inter.channel))
+
         # create modal
         modal = await self._send_wip_modal(
             inter,
             modal_title=f"Register #{inter.channel.name} as a WIP",
             modal_song_placeholder=inter.channel.name,
-            modal_offer_soundcloud=not inter.channel.name.startswith("sketch")
-        )
+            modal_offer_soundcloud=not is_sketch)
 
         # parse soundcloud
         track = None

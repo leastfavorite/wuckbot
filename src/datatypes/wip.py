@@ -9,7 +9,6 @@ from ..utils import embeds, buttons, get_audio_attachment, get_blame, Blamed
 from .. import soundcloud, state
 
 class Update(TypedDict):
-    # TODO: check after implementation if this actually matters
     file: Optional[disnake.Message] = None
     message: disnake.Message
     timestamp: datetime
@@ -19,6 +18,7 @@ class Update(TypedDict):
     async def without_message(self):
         pass
 
+    # TODO
     @without("track")
     async def without_track(self):
         pass
@@ -228,6 +228,10 @@ class Wip(TypedDict):
         # who has sent a file. tbh, we should maybe do this in /wipify
         # TODO
         if existing_channel:
+            # keep sketches from simultaneously being WIPs
+            state().sketches = [
+                s for s in state().sketches if s.channel != existing_channel]
+
             async for msg in existing_channel.history(limit=1000):
 
                 # add everyone who sent an audio file

@@ -1,7 +1,9 @@
 from disnake.ext import commands
 import disnake
+from datetime import datetime
 
 from ..utils import error_handler, UserError, embeds, buttons, get_blame
+from ..datatypes import Sketch
 from .. import soundcloud, state
 
 class EventCog(commands.Cog):
@@ -29,6 +31,9 @@ class EventCog(commands.Cog):
         if name == "trackdelete":
             s_id, token = args
             return await self.handle_track_delete(inter, int(s_id), token)
+
+        if name == "newsketch":
+            return await self.handle_new_sketch(inter)
 
     async def handle_wip_join(self,
                               inter: disnake.MessageInteraction,
@@ -137,6 +142,52 @@ class EventCog(commands.Cog):
                 f"{inter.author.mention} chose to delete "
                 f"`{title}` from SoundCloud.")
         )
+
+    @staticmethod
+    def get_sketch_name(category: disnake.CategoryChannel) -> str:
+        # get name of new channel
+        sketch_names = set(channel.name for channel in category.channels)
+
+        now = datetime.now()
+        month = now.strftime("%b").lower()
+        day = now.strftime("%d").strip("0")
+
+        channel_name_base = f"sketch-{month}{day}"
+
+        if channel_name_base not in sketch_names:
+            return channel_name_base
+
+        for i in range(2, 11):
+            channel_name = f"{channel_name_base}-{i}"
+            if channel_name not in sketch_names:
+                return channel_name
+
+        raise TypeError(
+            "Couldn't find a sketch name! Are there too many sketches?")
+
+    async def handle_sketch_create(self,
+                                   inter: disnake.MessageInteraction):
+        if not inter.channel:
+            return
+
+        category = inter.channel.category
+        if not category:
+            return
+
+        name = self.get_sketch_name(category)
+
+        # create new channel
+        channel = await category.create_text_channel(
+            name=name,
+            reason="new sketch",
+            topic="/wipify",
+            position=2)
+
+        state().sketches.append(await Sketch(channel=channel))
+
+        await inter.response.send_message(
+            ephemeral=True,
+            embed=embeds.success(f"Sketch {channel.mention} created."))
 
     # channel remove (check if wip)
     @commands.Cog.listener("on_guild_channel_delete")
@@ -276,7 +327,7 @@ class EventCog(commands.Cog):
 
         # actually do stuff
         if pinned_wip:
-            pinned_wip.pinned = None
+            pinned_wip.pinned = None # type: ignore
             await pinned_wip.update_pinned()
 
         if update_wip:

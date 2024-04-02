@@ -58,3 +58,11 @@ def track_delete(track: soundcloud.Track):
         emoji="\N{WASTEBASKET}",
         style=disnake.ButtonStyle.danger,
         custom_id=f"trackdelete|{track.s_id}|{track.secret_token}")
+
+def new_sketch():
+    return disnake.ui.Button(
+        label="New Sketch",
+        emoji="\N{MEMO}",
+        style=disnake.ButtonStyle.primary,
+        custom_id="sketchnew"
+    )

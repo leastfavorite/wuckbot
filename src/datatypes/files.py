@@ -5,6 +5,7 @@ from ..validator import JsonFile, TypedDict
 from .. import soundcloud
 
 from .wip import Wip
+from .sketch import Sketch
 
 class LinkedUser(TypedDict):
     sc: soundcloud.User
@@ -12,6 +13,7 @@ class LinkedUser(TypedDict):
 
 class State(JsonFile):
     wips: Annotated[list[Wip], list]
+    sketches: Annotated[list[Sketch], list]
     links: Annotated[list[LinkedUser], list]
 
 class Secrets(JsonFile):

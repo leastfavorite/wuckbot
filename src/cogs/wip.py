@@ -1,5 +1,4 @@
 import disnake
-import asyncio
 from disnake.ext import commands
 
 from ..utils import embeds, error_handler, UserError, send_modal
