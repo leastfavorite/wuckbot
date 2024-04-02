@@ -1,7 +1,7 @@
 import disnake
 from types import SimpleNamespace
 from secrets import token_hex
-from typing import Optional
+from typing import Optional, TypeAlias
 
 async def send_modal(inter: disnake.ApplicationCommandInteraction,
                      *args, ephemeral: bool = True, **kwargs):
@@ -31,3 +31,18 @@ def get_audio_attachment(message: disnake.Message) -> Optional[disnake.Attachmen
         return attachment
 
     return None
+
+Blamed: TypeAlias = disnake.User | disnake.Member | disnake.Object | None
+
+async def get_blame(guild: disnake.Guild,
+                    action: disnake.AuditLogAction,
+                    target_id: int) -> Blamed:
+    async for entry in guild.audit_logs(action=action, limit=10):
+        if not entry.target:
+            continue
+        if entry.target.id == target_id:
+            if not entry.user:
+                return None
+            return entry.user
+    else:
+        return None

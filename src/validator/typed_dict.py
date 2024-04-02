@@ -9,6 +9,8 @@ from typeguard import check_type
 from .serializer import BaseSerializer, Serializable
 
 T = TypeVar('T')
+MaybeAwaitable: TypeAlias = Union[T, Awaitable[T]]
+
 Without: TypeAlias = \
     Union[Callable[['TypedDict', Serializable], None],
           Callable[['TypedDict', Serializable], Awaitable[None]]]
@@ -217,11 +219,17 @@ class TypedDict(metaclass=TypedDictMeta):
                 continue
 
             ran_without = True
+
+            params = inspect.signature(without).parameters
+
             if run_withouts:
-                if asyncio.iscoroutinefunction(without):
-                    await without(instance, kwargs.get(name))
+                if 'raw' in params:
+                    result = without(instance, raw=kwargs.get(name))
                 else:
-                    without(instance, kwargs.get(name))
+                    result = without(instance)
+
+                if asyncio.iscoroutine(result):
+                    result = await result
             else:
                 break
 
@@ -238,9 +246,14 @@ class TypedDict(metaclass=TypedDictMeta):
                 continue
 
             if default_factory.from_decorator:
-                result = default_factory.f(instance)
+                params = inspect.signature(default_factory.f).parameters
+
+                if 'raw' in params:
+                    result = default_factory.f(instance, raw=kwargs.get(name))
+                else:
+                    result = default_factory.f(instance)
             else:
-                result = default_factory.f()
+                result = default_factory.f() # type: ignore
 
             if asyncio.iscoroutine(result):
                 result = await result

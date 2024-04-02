@@ -1,7 +1,7 @@
 from disnake.ext import commands
 import disnake
 
-from ..utils import error_handler, UserError, embeds, buttons
+from ..utils import error_handler, UserError, embeds, buttons, get_blame
 from .. import soundcloud, state
 
 class EventCog(commands.Cog):
@@ -109,8 +109,7 @@ class EventCog(commands.Cog):
             buttons.wip_view_next(index + 1)
         ]
 
-        # TODO replace with as_embed
-        embed = await wip.view_embed()
+        embed = wip.view_embed()
 
         await inter.response.edit_message(
             embed=embed,
@@ -147,7 +146,15 @@ class EventCog(commands.Cog):
             return
         assert(isinstance(channel, disnake.TextChannel))
 
-        await wip.without_channel()
+        # don't do anything if we deleted the channel
+        blamed = await get_blame(
+            guild=channel.guild,
+            action=disnake.AuditLogAction.channel_delete,
+            target_id=channel.id)
+        if blamed and blamed.id == channel.guild.me.id:
+            return
+
+        await wip.without_channel(author=blamed)
         state().wips = [wip for wip in state().wips if wip.channel != channel]
 
     # role remove (check if wip)
@@ -157,18 +164,55 @@ class EventCog(commands.Cog):
         if not wip:
             return
 
-        await wip.reconstruct_role()
+        # don't do anything if we deleted the role
+        blamed = await get_blame(
+            guild=role.guild,
+            action=disnake.AuditLogAction.role_delete,
+            target_id=role.id)
+        if blamed and blamed.id == role.guild.me.id:
+            return
+
+        await wip.reconstruct_role(author=blamed)
 
     # channel name change (check if wip)
     @commands.Cog.listener("on_guild_channel_update")
-    async def on_channel_update(self, channel: disnake.abc.GuildChannel):
-        wip = disnake.utils.get(state().wips, channel=channel)
+    async def on_channel_update(self, _, channel: disnake.abc.GuildChannel):
+        print(channel)
+        wip = disnake.utils.get(state().wips, channel__id=channel.id)
         if not wip:
             return
         assert(isinstance(channel, disnake.TextChannel))
 
+        print("11111")
+
+        # don't do anything if we changed the name
+        blamed = await get_blame(
+            guild=channel.guild,
+            action=disnake.AuditLogAction.channel_update,
+            target_id=channel.id)
+        if blamed and blamed.id == channel.guild.me.id:
+            return
+
+        print("2222")
+
         if channel.name != wip._get_channel_name(wip.name, wip.progress):
             await wip.edit()
+
+    @commands.Cog.listener("on_guild_role_update")
+    async def on_role_update(self, _, role: disnake.Role):
+        wip = disnake.utils.get(state().wips, role=role)
+        if not wip:
+            return
+
+        blamed = await get_blame(
+            guild=role.guild,
+            action=disnake.AuditLogAction.role_update,
+            target_id=role.id)
+        if blamed and blamed.id == role.guild.me.id:
+            return
+
+        if role.name != wip.name:
+            await role.edit(name=wip.name)
 
     # user leaves (check if credited)
     @commands.Cog.listener("on_raw_member_remove")
@@ -208,14 +252,33 @@ class EventCog(commands.Cog):
     @commands.Cog.listener("on_raw_message_delete")
     async def on_message_delete(self, evt: disnake.RawMessageDeleteEvent):
         pinned_wip = disnake.utils.get(state().wips, pinned__id=evt.message_id)
-        update_wip = disnake.utils.get(
-            state().wips, update__message__id=evt.message_id)
+        update_wip = disnake.utils.find(
+            lambda w: w.update and w.update.message.id == evt.message_id,
+            state().wips)
 
+        if not pinned_wip and not update_wip:
+            return
+
+        # get guild
+        if not evt.guild_id:
+            return None
+        guild = self.bot.get_guild(evt.guild_id)
+        if not guild:
+            return None
+
+        # don't do anything if we deleted the message
+        blamed = await get_blame(
+            guild=guild,
+            action=disnake.AuditLogAction.channel_update,
+            target_id=evt.message_id)
+        if blamed and blamed.id == guild.me.id:
+            return
+
+        # actually do stuff
         if pinned_wip:
+            pinned_wip.pinned = None
             await pinned_wip.update_pinned()
 
         if update_wip:
             update_wip.update = None
             await update_wip.edit()
-
-    # integration, baby!

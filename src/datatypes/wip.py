@@ -5,7 +5,7 @@ from datetime import datetime
 
 from ..validator import TypedDict, without, default
 from ..utils.errors import UserError, send_error
-from ..utils import embeds, buttons, get_audio_attachment
+from ..utils import embeds, buttons, get_audio_attachment, get_blame, Blamed
 from .. import soundcloud, state
 
 class Update(TypedDict):
@@ -52,25 +52,58 @@ class Wip(TypedDict):
         raise TypeError("Guild not provided in WIP. Maybe I got kicked?")
 
     @without("channel")
-    async def without_channel(self):
+    async def without_channel(self, *,
+                              raw: str | None = None,
+                              author: Blamed = None):
         if not self.guild:
             # we've got bigger fish to fry
+            return
+
+        if raw and not author:
+            _, channel_id = [int(x) for x in raw.split("|")]
+
+            # don't do anything if we deleted the channel
+            author = await get_blame(
+                guild=self.guild,
+                action=disnake.AuditLogAction.channel_delete,
+                target_id=channel_id)
+
+        if author and author.id == self.guild.me.id:
             return
 
         # deletes role
         if self.role:
             await self.role.delete()
 
-        embed = embeds.error( msg="Please don't delete WIP channels. If you don't want to work "
+        embed = embeds.error(
+            msg="Please don't delete WIP channels. If you don't want to work "
                 "on a song anymore, use `/archive` instead.",
             title=f"WIP Channel '{self.name}' Deleted")
-
         components = [buttons.track_delete(self.track)] if self.track else None
+        content = author.mention if author else ""
 
-        await send_error(embed=embed, components=components)
+        await send_error(
+            guild=self.guild,
+            content=content,
+            embed=embed,
+            components=components)
 
     @default("role")
-    async def reconstruct_role(self):
+    async def reconstruct_role(self, *,
+                               raw: str | None = None,
+                               author: Blamed = None):
+        if raw and not author:
+            _, role_id = [int(x) for x in raw.split("|")]
+
+            # don't do anything if we deleted the channel
+            author = await get_blame(
+                guild=self.guild,
+                action=disnake.AuditLogAction.role_delete,
+                target_id=role_id)
+
+        if author and author.id == self.guild.me.id:
+            return
+
         self.role = await self.guild.create_role(
             name=self.name,
             permissions=disnake.Permissions.none(),
@@ -78,6 +111,8 @@ class Wip(TypedDict):
             reason="role reconstruction for WIP")
 
         await send_error(
+            guild=self.guild,
+            content=author.mention if author else "",
             embed=embeds.error(
                 msg="Please don't delete WIP roles. If you don't want to work "
                     "on a song anymore, use `/archive` instead.",
@@ -253,7 +288,7 @@ class Wip(TypedDict):
             show_help=False)
 
     def pinned_embed(self):
-         return self.as_embed(
+        return self.as_embed(
             title_prefix="\N{PUSHPIN}",
             include_links=True,
             use_update_timestamp=True,
@@ -353,9 +388,9 @@ class Wip(TypedDict):
         self.name = name or self.name
         self.progress = progress or self.progress
 
-        if name is not None or progress is not None:
-            await self.channel.edit(
-                name=self._get_channel_name(self.name, self.progress))
+        new_name = self._get_channel_name(self.name, self.progress)
+        if self.channel.name != new_name:
+            await self.channel.edit(name=new_name)
 
         if self.update:
             await self.update.message.edit(embed=self.update_embed())

@@ -152,11 +152,7 @@ class UpdateCog(commands.Cog):
             # send update message to #updates
             await edit_status(f"Sending to {updates_channel.mention}...")
 
-            embed = wip.as_embed(
-                title_prefix="\N{BELL}",
-                include_links=False,
-                use_update_timestamp=False,
-                show_help=False)
+            embed = wip.update_embed()
 
             update_msg = await updates_channel.send(
                 embed=embed,
