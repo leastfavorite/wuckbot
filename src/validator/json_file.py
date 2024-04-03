@@ -27,33 +27,32 @@ def _json_file_save(self, filename, backups_folder, registrar):
         current_backup = filename
         stem = current_backup.stem
         suffix = current_backup.suffix
-        dt = datetime.now(UTC).strftime("%y-%m-%d-%H-%M")
-        backup_stem = f"{stem}-{dt}.{suffix}"
+        dt = datetime.now(UTC).strftime("%y-%m-%d-%H%M%S")
+        backup_stem = f"{stem}-{dt}{suffix}"
 
         # check if backups exist
-        backups: list[Path] = list(backups_folder.glob(f"{stem}-*.{suffix}"))
-        if not backups:
-            return
+        backups: list[Path] = list(backups_folder.glob(f"{stem}-*{suffix}"))
 
-        # get most recent backup
-        backups.sort(key=lambda x: x.stat().st_ctime_ns, reverse=True)
-        last_backup = backups[0]
+        if backups:
+            # get most recent backup
+            backups.sort(key=lambda x: x.stat().st_ctime_ns, reverse=True)
+            last_backup = backups[0]
 
-        # if the files are the same size
-        last_backup_size = last_backup.stat().st_size
-        current_size = current_backup.stat().st_size
+            # if the files are the same size
+            last_backup_size = last_backup.stat().st_size
+            current_size = current_backup.stat().st_size
 
-        if last_backup_size == current_size:
+            if last_backup_size == current_size:
 
-            # with matching hashes
-            with current_backup.open("rb") as fp:
-                current_hash = hashlib.file_digest(fp, "sha256")
-            with last_backup.open("rb") as fp:
-                last_hash = hashlib.file_digest(fp, "sha256")
+                # with matching hashes
+                with current_backup.open("rb") as fp:
+                    current_hash = hashlib.file_digest(fp, "sha256")
+                with last_backup.open("rb") as fp:
+                    last_hash = hashlib.file_digest(fp, "sha256")
 
-            if current_hash == last_hash:
-                # the file wasn't updated
-                return
+                if current_hash.digest() == last_hash.digest():
+                    # the file wasn't updated
+                    return
 
         # make a new backup
         current_backup.rename(backups_folder / backup_stem)
@@ -61,6 +60,7 @@ def _json_file_save(self, filename, backups_folder, registrar):
         # keep only the {backup_count} most recent backups
         for old_backup in backups[backup_count-1:]:
             old_backup.unlink()
+
 
     async def save(backup_count: int = 10):
         serialized = await registrar.serialize(self, type(self))
