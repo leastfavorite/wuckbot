@@ -1,7 +1,7 @@
 from disnake.ext import commands, tasks
 import disnake
 
-from ..utils import error_handler, buttons, get_audio_attachment
+from ..utils import error_handler, buttons, get_audio_attachment, embeds
 from ..filemethods import state
 
 class SketchCog(commands.Cog):
@@ -14,9 +14,12 @@ class SketchCog(commands.Cog):
     @error_handler()
     async def sendsketchembed(self,
                               inter: disnake.ApplicationCommandInteraction):
+        """
+        Sends an embed with a "Create Sketch" button.
+        """
         embed = disnake.Embed(
             color=disnake.Color.blurple(),
-            title="\N{MEMO} Create a Sketch \N{MEMO}",
+            title="\N{ELECTRIC LIGHT BULB} Create a Sketch \N{ELECTRIC LIGHT BULB}",
             description="Sketches are public channels for fleshing out new ideas, "
                         "often in vc. You can think of them as the precursor to a "
                         "WIP channel.\n"
@@ -26,8 +29,11 @@ class SketchCog(commands.Cog):
 
         await inter.channel.send(
             embed=embed,
-            components=[buttons.new_sketch()]
-        )
+            components=[buttons.new_sketch()])
+
+        await inter.response.send_message(
+            ephemeral=True,
+            embed=embeds.success("Embed sent!"))
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: disnake.Message):

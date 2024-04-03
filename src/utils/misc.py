@@ -46,3 +46,12 @@ async def get_blame(guild: disnake.Guild,
             return entry.user
     else:
         return None
+
+async def get_collaborators(channel: disnake.TextChannel) -> set[disnake.Member]:
+    members = set()
+    async for msg in channel.history(limit=1000):
+        # add everyone who sent an audio file
+        if get_audio_attachment(msg) and msg.author != channel.guild.me:
+            assert isinstance(msg.author, disnake.Member)
+            members.add(msg.author)
+    return members

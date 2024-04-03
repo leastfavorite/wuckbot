@@ -32,7 +32,7 @@ class EventCog(commands.Cog):
             s_id, token = args
             return await self.handle_track_delete(inter, int(s_id), token)
 
-        if name == "newsketch":
+        if name == "sketchnew":
             return await self.handle_new_sketch(inter)
 
     async def handle_wip_join(self,
@@ -165,8 +165,7 @@ class EventCog(commands.Cog):
         raise TypeError(
             "Couldn't find a sketch name! Are there too many sketches?")
 
-    async def handle_sketch_create(self,
-                                   inter: disnake.MessageInteraction):
+    async def handle_new_sketch(self, inter: disnake.MessageInteraction):
         if not inter.channel:
             return
 
@@ -180,10 +179,10 @@ class EventCog(commands.Cog):
         channel = await category.create_text_channel(
             name=name,
             reason="new sketch",
-            topic="/wipify",
-            position=2)
+            topic="/wipify")
+        await channel.move(end=True)
 
-        state().sketches.append(await Sketch(channel=channel))
+        state().sketches.append(await Sketch.create(channel=channel))
 
         await inter.response.send_message(
             ephemeral=True,
@@ -192,6 +191,11 @@ class EventCog(commands.Cog):
     # channel remove (check if wip)
     @commands.Cog.listener("on_guild_channel_delete")
     async def on_channel_remove(self, channel: disnake.abc.GuildChannel):
+        # delete from sketches if necessary
+        state().sketches = [
+            sketch for sketch in state().sketches if sketch.channel != channel]
+
+        # get wip
         wip = disnake.utils.get(state().wips, channel=channel)
         if not wip:
             return
@@ -228,13 +232,10 @@ class EventCog(commands.Cog):
     # channel name change (check if wip)
     @commands.Cog.listener("on_guild_channel_update")
     async def on_channel_update(self, _, channel: disnake.abc.GuildChannel):
-        print(channel)
         wip = disnake.utils.get(state().wips, channel__id=channel.id)
         if not wip:
             return
         assert(isinstance(channel, disnake.TextChannel))
-
-        print("11111")
 
         # don't do anything if we changed the name
         blamed = await get_blame(
@@ -243,8 +244,6 @@ class EventCog(commands.Cog):
             target_id=channel.id)
         if blamed and blamed.id == channel.guild.me.id:
             return
-
-        print("2222")
 
         if channel.name != wip._get_channel_name(wip.name, wip.progress):
             await wip.edit()

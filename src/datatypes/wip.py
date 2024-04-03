@@ -5,7 +5,7 @@ from datetime import datetime
 
 from ..validator import TypedDict, without, default
 from ..utils.errors import UserError, send_error
-from ..utils import embeds, buttons, get_audio_attachment, get_blame, Blamed
+from ..utils import embeds, buttons, get_blame, Blamed, get_collaborators
 from .. import soundcloud, state
 
 class Update(TypedDict):
@@ -224,20 +224,13 @@ class Wip(TypedDict):
 
         members = set(extra_members if extra_members else [])
 
-        # if building from an existing_channel, members are anybody
-        # who has sent a file. tbh, we should maybe do this in /wipify
-        # TODO
         if existing_channel:
             # keep sketches from simultaneously being WIPs
             state().sketches = [
                 s for s in state().sketches if s.channel != existing_channel]
 
-            async for msg in existing_channel.history(limit=1000):
-
-                # add everyone who sent an audio file
-                if get_audio_attachment(msg) and msg.author != guild.me:
-                    assert isinstance(msg.author, disnake.Member)
-                    members.add(msg.author)
+            # add anyone who has sent an audio file
+            members.update(await get_collaborators(existing_channel))
 
         await asyncio.gather(
             *(m.add_roles(new_role, reason="/wipify") for m in members))
@@ -254,7 +247,8 @@ class Wip(TypedDict):
             "overwrites": {
                 **{role: disnake.PermissionOverwrite(view_channel=True)
                    for role in access_roles},
-                **{role: disnake.PermissionOverwrite(view_channel=False)
+                **{role: disnake.PermissionOverwrite(view_channel=False,
+                                                     manage_channels=False)
                    for role in deny_roles}
             }
         }
@@ -297,6 +291,16 @@ class Wip(TypedDict):
             include_links=True,
             use_update_timestamp=True,
             show_help=True)
+
+    def archive_embed(self):
+        embed = self.as_embed(
+            title_prefix="\N{OPEN FILE FOLDER}",
+            include_links=True,
+            use_update_timestamp=True,
+            show_help=False)
+        embed.color = disnake.Color.yellow()
+        embed.description = "This WIP has been archived."
+        return embed
 
     def as_embed(self, *,
                  title_prefix: str,

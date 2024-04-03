@@ -114,8 +114,6 @@ def error_handler(ephemeral: bool = True):
 
             try:
                 retval = await f(*args, **kwargs)
-                if inter and not inter.response.is_done():
-                    await inter.response.defer(with_message=False)
                 return retval
 
             except Exception as e:

@@ -47,7 +47,6 @@ class WipsCog(commands.Cog):
 
     def get_view_components(self, author: disnake.Member, index: int):
         wip: Wip = state().wips[index]
-        num_wips = len(state().wips)
 
         return [
             buttons.wip_view_prev(index - 1),
@@ -76,10 +75,10 @@ class WipsCog(commands.Cog):
         else:
             index = len(state().wips) - 1
 
-        wip = state().wips[index]
+        wip_ = state().wips[index]
         await inter.response.send_message(
             ephemeral=True,
-            embed=wip.view_embed(),
+            embed=wip_.view_embed(),
             components=self.get_view_components(inter.author, index))
 
     @staticmethod

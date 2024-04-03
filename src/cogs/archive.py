@@ -1,17 +1,18 @@
 from disnake.ext import commands, tasks
 import disnake
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta
 import calendar
 
 import asyncio
-from ..utils import embeds
+from ..utils import embeds, error_handler, UserError, get_audio_attachment
 from ..filemethods import state
 from ..datatypes import Wip, Sketch
 
 class ArchiveCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
-        self.last_loop: datetime = datetime.fromtimestamp(0, UTC)
+        self.last_loop: datetime = disnake.utils.utcnow()
+        self.loop.start()
 
     @staticmethod
     def add_time(dt: datetime, months: int = 0, days: int = 0) -> datetime:
@@ -25,26 +26,26 @@ class ArchiveCog(commands.Cog):
         for wip in state().wips:
             dt = wip.update.timestamp if wip.update else wip.timestamp
 
-            archive_time = self.add_time(dt, months=6)
-            nice_pester_times = [
-                ("has been inactive for 3 days",   self.add_time(dt, days=3)),
-                ("has been inactive for 1 week",   self.add_time(dt, days=7)),
-                ("has been inactive for 2 weeks",  self.add_time(dt, days=14)),
-                ("has been inactive for 1 month",  self.add_time(dt, months=1)),
-                ("has been inactive for 3 months", self.add_time(dt, months=3)),
+            pester_times = [
+                ("will be archived in 1 day",  self.add_time(dt, months=6, days=-1)),
+                ("will be archived in 3 days", self.add_time(dt, months=6, days=-3)),
+                ("will be archived in 1 week", self.add_time(dt, months=6, days=-7)),
                 ("has been inactive for 5 months", self.add_time(dt, months=5)),
-                ("will be archived in 1 week", archive_time - timedelta(days=7)),
-                ("will be archived in 3 days", archive_time - timedelta(days=3)),
-                ("will be archived in 1 day",  archive_time - timedelta(days=1))
+                ("has been inactive for 3 months", self.add_time(dt, months=3)),
+                ("has been inactive for 1 month",  self.add_time(dt, months=1)),
+                ("has been inactive for 2 weeks",  self.add_time(dt, days=14)),
+                ("has been inactive for 1 week",   self.add_time(dt, days=7)),
+                ("has been inactive for 3 days",   self.add_time(dt, days=3))
             ]
-            for time_str, time in nice_pester_times:
-                if self.last_loop < time <= time:
+
+            for time_str, pester_time in pester_times:
+                if self.last_loop < pester_time <= time:
                     embed = disnake.Embed(
                         color=disnake.Color.yellow(),
                         title=f"\N{HOURGLASS} This WIP {time_str} \N{HOURGLASS}",
                         timestamp = dt,
                         description="If a WIP remains inactive for 6 months, it "
-                                    "will be archived. To reset the timer, "
+                                    "will be archived.\nTo reset the timer, "
                                     "post a new update.\n"
                                     "To archive the song now, use `/archive`.")
                     embed.set_footer(icon_url=embeds.WUCK, text="Last Update")
@@ -54,18 +55,20 @@ class ArchiveCog(commands.Cog):
                         embed=embed
                     )
 
+                    break
+
     # pester sketch after 2 days
     async def pester_sketches(self, time):
         for sketch in state().sketches:
-            if self.last_loop < sketch.timestamp + timedelta(days=2) <= time:
+            if self.last_loop < self.add_time(sketch.timestamp, days=2) <= time:
                 embed = disnake.Embed(
                     color=disnake.Color.yellow(),
                     title="\N{HOURGLASS} This sketch will be archived in 1 day \N{HOURGLASS}",
                     timestamp=sketch.timestamp,
-                    description="Sketches are archived after 3 days of inactivity. "
+                    description="Sketches are archived after 3 days of inactivity.\n"
                                 "To reset the timer, post an audio file in the chat.\n"
                                 "To archive the sketch now, use `/archive`.\n"
-                                "To turn it into a WIP, use `/wipify`.\n")
+                                "To turn it into a WIP, use `/wipify`.")
                 embed.set_footer(icon_url=embeds.WUCK, text="Last Update")
 
                 await sketch.channel.send(
@@ -77,16 +80,16 @@ class ArchiveCog(commands.Cog):
     async def archive_wips(self, time):
         for wip in state().wips:
             timestamp = wip.update.timestamp if wip.update else wip.timestamp
-            if self.last_loop < self.add_time(timestamp, months=6) <= time:
+            if self.add_time(timestamp, months=6) <= time:
                 await self.archive_wip(wip)
 
     # archive sketch after 3 days
     async def archive_sketches(self, time):
         for sketch in state().sketches:
-            if self.last_loop < sketch.timestamp + timedelta(days=3) <= time:
+            if self.add_time(sketch.timestamp, days=3) <= time:
                 await self.archive_sketch(sketch)
 
-    @tasks.loop(hours=1.0)
+    @tasks.loop(seconds=2.0)
     async def loop(self):
         time = disnake.utils.utcnow()
         await asyncio.gather(
@@ -99,29 +102,95 @@ class ArchiveCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def archive_wip(self, wip: Wip):
+        archive_category = disnake.utils.find(
+            lambda c: c.name.lower() == "archive", wip.guild.categories)
+        if not archive_category:
+            raise UserError("No category called `archive`.")
+
+        view_archive = disnake.utils.get(wip.guild.roles, name="view archive")
+        if not view_archive:
+            raise UserError("No role called `view archive`.")
+
+        webcage_role = disnake.utils.get(wip.guild.roles, name="webcage")
+        if not webcage_role:
+            raise UserError("No role called `webcage`.")
+
         # remove wip from state
+        state().wips = [w for w in state().wips if w.channel != wip.channel]
 
         # TODO: if soundcloud track, move it to the archive playlist
+
         # remove the wip role
+        await wip.role.delete(reason="wip archival")
+
         # change permissions so only people with "view archives" role can access
         # move the channel to the archive category
+        await wip.channel.edit(
+            category=archive_category,
+            overwrites={
+                wip.guild.default_role: disnake.PermissionOverwrite(view_channel=False),
+                webcage_role: disnake.PermissionOverwrite(
+                    view_channel=False,
+                    manage_channels=False),
+                view_archive: disnake.PermissionOverwrite(view_channel=True)
+            }
+        )
+        await wip.channel.move(offset=1, beginning=True)
 
         # create an embed in #updates
-        pass
+        updates = disnake.utils.get(
+            wip.guild.text_channels, name="updates")
+        if updates is None:
+            raise UserError("Could not find a #updates channel.")
+
+        await updates.send(embed=wip.archive_embed())
 
     async def archive_sketch(self, sketch: Sketch):
         # remove sketch from state
+        state().sketches = [
+            s for s in state().sketches if s.channel != sketch.channel]
 
-        # get all active users
-        # (break this into misc, we use this in from_channel)
+        guild = sketch.channel.guild
 
-        # create an embed in the sketch-archive channel
-        # create a new thread in the sketch-archive channel
+        archive = disnake.utils.get(guild.text_channels, name="sketch-archive")
+        if not archive:
+            raise UserError("`#sketch-archive` channel does not exist.")
 
-        # send each audio file into that thread
+        e = "\N{OPEN FILE FOLDER}"
+        embed = disnake.Embed(
+            color=disnake.Color.blurple(),
+            timestamp=sketch.timestamp,
+            title=f"{e} Archived Sketch: {sketch.channel.name} {e}")
+        embed.set_footer(icon_url=embeds.WUCK,
+                         text="Last Updated")
 
-        # send a message to #updates
-        pass
+        thread_message = None
+        thread = None
+
+        contributors = set()
+        async for message in sketch.channel.history(limit=1000):
+            attachment = get_audio_attachment(message)
+            if not attachment:
+                continue
+
+            contributors.add(message.author)
+
+            if not thread:
+                thread_message = await archive.send(embed=embed)
+                thread = await thread_message.create_thread(
+                    name=sketch.channel.name,
+                    auto_archive_duration=10080,
+                    reason="sketch archival")
+            await thread.send(content=message.author.mention,
+                              file=await attachment.to_file())
+
+        if thread_message:
+            embed.add_field(
+                name="Contributors",
+                value="\n".join(c.mention for c in contributors))
+            await thread_message.edit(embed=embed)
+
+        await sketch.channel.delete(reason="sketch archival")
 
     @commands.slash_command(
         dm_permission=False,
@@ -130,10 +199,15 @@ class ArchiveCog(commands.Cog):
     async def archive(self, inter: disnake.AppCommandInteraction):
         if (wip := disnake.utils.get(state().wips, channel=inter.channel)):
             await self.archive_wip(wip)
+            await inter.response.send_message(
+                embed=embeds.success(
+                    "This WIP has been archived, "
+                    f"as requested by {inter.author.mention}."))
             return
 
         if (sketch := disnake.utils.get(state().sketches, channel=inter.channel)):
             await self.archive_sketch(sketch)
+            # channel gets deleted, so there's no way to really respond...
             return
 
         raise UserError(

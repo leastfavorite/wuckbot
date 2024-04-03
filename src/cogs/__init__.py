@@ -4,6 +4,7 @@ from .wipify import WipifyCog
 from .update import UpdateCog
 from .events import EventCog
 from .sketch import SketchCog
+from .archive import ArchiveCog
 
 __all__ = [
     'WipCog',
@@ -11,5 +12,6 @@ __all__ = [
     'WipifyCog',
     'UpdateCog',
     'EventCog',
-    'SketchCog'
+    'SketchCog',
+    'ArchiveCog'
 ]
