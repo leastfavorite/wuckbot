@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from typing import Callable, Optional, TYPE_CHECKING
-from .datatypes import User, Track  # Playlist
+from .datatypes import User, Track, Playlist
 from ..validator import Serializable
 
 if TYPE_CHECKING:
@@ -143,5 +143,22 @@ def routes(client):
 
         "fetch_user": Route(client, "get",
                             "/users/soundcloud:users:{s_id}",
-                            parse=User)
+                            parse=User),
+
+        "fetch_playlist": Route(client, "get",
+                                "/playlists/{s_id}",
+                                params={"secret_token": NotRequired},
+                                parse=Playlist),
+
+        "edit_playlist": Route(
+            client, "put", "/playlists/{s_id}",
+            json={"tracks": Required}
+        ),
+
+        "fetch_playlist_tracks": Route(client, "get", "/tracks",
+                                       params={
+                                           "ids": Required,
+                                           "playlistId": Required,
+                                           "playlistSecretToken": NotRequired
+                                       })
     }

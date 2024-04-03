@@ -89,7 +89,7 @@ class ArchiveCog(commands.Cog):
             if self.add_time(sketch.timestamp, days=3) <= time:
                 await self.archive_sketch(sketch)
 
-    @tasks.loop(seconds=2.0)
+    @tasks.loop(hours=1.0)
     async def loop(self):
         time = disnake.utils.utcnow()
         await asyncio.gather(

@@ -114,15 +114,47 @@ class Track(TrackOrPlaylist):
 
 
 class Playlist(TrackOrPlaylist):
-    def __init__(self, *args, tracks: list[dict], **kwargs):
-        super().__init__(*args, **kwargs)
-        self.tracks = [Track(**track) for track in tracks]
+    def __init__(self, sc: 'Client', *args, tracks: list[dict], **kwargs):
+        super().__init__(sc, *args, **kwargs)
+        self.track_ids = [track["id"] for track in tracks]
 
-    async def add_track(self, track: Track):
-        pass
+    def __contains__(self, other):
+        return isinstance(other, Track) and other.s_id in self.track_ids
+
+    async def tracks(self):
+        CHUNK_SIZE = 20
+        for i in range(0, len(self.track_ids), CHUNK_SIZE):
+            track_id_chunk = self.track_ids[i:i+CHUNK_SIZE]
+            tracks = await self.sc.routes["fetch_playlist_tracks"].run(
+                ids=",".join(str(t) for t in track_id_chunk),
+                playlistId=self.s_id,
+                playlistSecretToken=self.secret_token
+            )
+            for track in tracks:
+                yield Track(self.sc, **track)
+
+    async def add_track(self, track: Track, top=False):
+        if track.private and not track.mine:
+            raise ValueError("Cannot add someone else's private track!")
+
+        if track in self:
+            return
+
+        if top:
+            self.track_ids.insert(0, track.s_id)
+        else:
+            self.track_ids.append(track.s_id)
+
+        await self.sc.routes["edit_playlist"].run(
+            s_id=self.s_id, tracks=self.track_ids)
 
     async def remove_track(self, track: Track):
-        pass
+        if track not in self:
+            return
 
-    async def delete(self):
-        pass
+        self.track_ids.remove(track.s_id)
+        await self.sc.routes["edit_playlist"].run(
+            s_id=self.s_id, tracks=self.track_ids)
+
+    # async def delete(self):
+    #     pass
