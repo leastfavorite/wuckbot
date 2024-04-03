@@ -44,9 +44,10 @@ class Route:
                     out[k] = kwargs[k]
                 continue
 
+            print(k, type(v))
             if isinstance(v, dict):
                 out[k] = cls._parse_args(v, **kwargs)
-            if isinstance(v, str):
+            elif isinstance(v, str):
                 out[k] = v.format(**kwargs)
             else:
                 out[k] = v

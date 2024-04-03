@@ -169,7 +169,7 @@ class UpdateCog(commands.Cog):
             # save!
             wip.update = Update(
                 file=file_msg,
-                update=update_msg,
+                message=update_msg,
                 timestamp=disnake.utils.utcnow()
             )
 

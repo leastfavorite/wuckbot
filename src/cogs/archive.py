@@ -105,15 +105,15 @@ class ArchiveCog(commands.Cog):
         archive_category = disnake.utils.find(
             lambda c: c.name.lower() == "archive", wip.guild.categories)
         if not archive_category:
-            raise UserError("No category called `archive`.")
+            raise UserError("Couldn't find a category called `archive`.")
 
         view_archive = disnake.utils.get(wip.guild.roles, name="view archive")
         if not view_archive:
-            raise UserError("No role called `view archive`.")
+            raise UserError("Couldn't find a role called `view archive`.")
 
         webcage_role = disnake.utils.get(wip.guild.roles, name="webcage")
         if not webcage_role:
-            raise UserError("No role called `webcage`.")
+            raise UserError("Couldn't find a role called `webcage`.")
 
         # remove wip from state
         state().wips = [w for w in state().wips if w.channel != wip.channel]
@@ -197,6 +197,10 @@ class ArchiveCog(commands.Cog):
         default_member_permissions=disnake.Permissions.none())
     @error_handler()
     async def archive(self, inter: disnake.AppCommandInteraction):
+        """
+        Archives a WIP or sketch channel.
+        """
+
         if (wip := disnake.utils.get(state().wips, channel=inter.channel)):
             await self.archive_wip(wip)
             await inter.response.send_message(
@@ -212,3 +216,27 @@ class ArchiveCog(commands.Cog):
 
         raise UserError(
             "This command must be run from a WIP or Sketch channel.")
+
+    @commands.slash_command(
+        dm_permission=False,
+        default_member_permissions=disnake.Permissions.none())
+    @error_handler()
+    async def viewarchive(self, inter: disnake.ApplicationCommandInteraction):
+        """
+        Toggles access to archive channels.
+        """
+        view_archives_role = disnake.utils.get(inter.guild.roles, name="view archive")
+        if view_archives_role is None:
+            raise UserError("Couldn't find a role called `view archive`.")
+
+        if view_archives_role in inter.author.roles:
+            await inter.author.remove_roles(view_archives_role)
+            await inter.response.send_message(
+                ephemeral=True, embed=embeds.success(
+                    "You are no longer viewing archived channels."))
+
+        else:
+            await inter.author.add_roles(view_archives_role)
+            await inter.response.send_message(
+                ephemeral=True, embed=embeds.success(
+                    "You are now viewing archived channels."))
