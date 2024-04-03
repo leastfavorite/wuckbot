@@ -32,10 +32,11 @@ def main():
         intents=intents,
         test_guilds=test_guilds,
         loop=loop)
-
-    sc = loop.run_until_complete(soundcloud.Client.create(oauth_token))
+    on_close = []
 
     async def _on_ready():
+        sc = await soundcloud.Client.create(oauth_token)
+        on_close.append(sc.close())
 
         registrar = validator.Registrar(
             *validator.base_serializers(),
@@ -45,7 +46,10 @@ def main():
 
         # load json
         await State.load("state.json", "backups/state", registrar)
+        on_close.append(State().save())
+
         await Secrets.load("secrets.json", "backups/secrets", registrar)
+        on_close.append(Secrets().save())
 
         for cog_name in cogs.__all__:
             Cog = getattr(cogs, cog_name)
@@ -63,15 +67,58 @@ def main():
 
     bot.add_listener(_on_ready, "on_ready")
 
+    async def runner() -> None:
+        try:
+            await bot.start(token=bot_token)
+        finally:
+            if not bot.is_closed():
+                await bot.close()
+            await asyncio.gather(*on_close)
+
+    def _shutdown_loop():
+        try:
+            tasks = {t for t in asyncio.all_tasks(loop=loop) if not t.done()}
+            if not tasks:
+                return
+
+            for task in tasks:
+                task.cancel()
+
+            loop.run_until_complete(
+                asyncio.gather(*tasks, return_exceptions=True))
+
+            for task in tasks:
+                if task.cancelled():
+                    continue
+                if task.exception() is not None:
+                    loop.call_exception_handler(
+                        {
+                            "message": "Unhandled exception during shutdown.",
+                            "exception": task.exception(),
+                            "task": task,
+                        }
+                    )
+
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
+
     try:
-        loop.run_until_complete(bot.start(token=bot_token))
+        loop.run_until_complete(runner())
     except KeyboardInterrupt:
-        loop.run_until_complete(State().save())
-        loop.run_until_complete(Secrets().save())
-        loop.run_until_complete(bot.close())
-        loop.run_until_complete(sc.close())
+        return None
     finally:
-        loop.close()
+        _shutdown_loop()
+
+
+async def soundcloud_test():
+    with open(SECRETS_FILENAME, "r") as fp:
+        secrets = json.load(fp)
+    oauth_token = secrets["sc_oauth"]
+    sc = await soundcloud.Client.create(oauth_token)
+
+    await sc.close()
 
 if __name__ == "__main__":
     main()
+    # asyncio.run(soundcloud_test())
