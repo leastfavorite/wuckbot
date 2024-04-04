@@ -93,6 +93,7 @@ class OauthCog(commands.Cog):
                 "That token doesn't work. Please try again.")
         )
 
+    # TODO: honestly this should should be in soundcloud.Client
     async def test_token(self, token: str = None):
         try:
             await self.sc.routes["me"].run(retry=True, oauth_token=token)

@@ -13,11 +13,6 @@ def Secrets():
     from ..datatypes import Secrets
     return Secrets()
 
-__all__ = [
-    'UserError',
-    'UserSuccess',
-]
-
 def _updates_channel(guild: disnake.Guild) -> Optional[disnake.TextChannel]:
     return disnake.utils.get(guild.text_channels, name="updates")
 
@@ -28,10 +23,6 @@ async def send_error(guild: Optional[disnake.Guild], **kwargs):
 
 # Represents an error caused by malformed user input.
 class UserError(Exception):
-    pass
-
-# Represents a successful interaction from a user.
-class UserSuccess(Exception):
     pass
 
 async def send_exception_embed(
@@ -79,14 +70,13 @@ async def send_exception_embed(
         raise RuntimeError("No place to put exception embed!")
 
 
+# TODO should have special case for handling oauth issues
 async def exc_embed(e: Exception,
                  guild: Optional[disnake.Guild] = None,
                  author: Optional[disnake.User] = None,
                  command: Optional[str] = None) -> Optional[disnake.Embed]:
     if isinstance(e, UserError):
         return error(e.args[0])
-    if isinstance(e, UserSuccess):
-        return success(e.args[0])
     if isinstance(e, asyncio.TimeoutError):
         return None
     await send_exception_embed(e, guild=guild, author=author, command=command)
@@ -122,7 +112,7 @@ def error_handler(ephemeral: bool = True):
                 # exc_embed will send an exception embed if necessary
                 if first_arg is None:
                     await exc_embed(e)
-                    if not isinstance(e, (UserError, UserSuccess, asyncio.TimeoutError)):
+                    if not isinstance(e, (UserError, asyncio.TimeoutError)):
                         raise e
                     return
 
@@ -190,7 +180,7 @@ def error_handler(ephemeral: bool = True):
                         pass
 
                 if not isinstance(
-                        e, (UserError, UserSuccess, asyncio.TimeoutError)):
+                        e, (UserError, asyncio.TimeoutError)):
                     raise e
         return _inner
     return _deco
