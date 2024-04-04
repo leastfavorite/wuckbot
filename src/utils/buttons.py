@@ -71,7 +71,7 @@ def oauth_instructions():
     return disnake.ui.Button(
         label="I'm an administrator",
         emoji="\N{GEAR}",
-        style=disnake.ButtonStyle.success,
+        style=disnake.ButtonStyle.danger,
         custom_id="oauthinstruction"
     )
 

@@ -10,8 +10,8 @@ class OauthCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot, sc: soundcloud.Client):
         self.bot = bot
         self.sc = sc
-        self.messages: list[disnake.Message] = None
-        # self.check_oauth.start()
+        self.messages: list[disnake.Message] = []
+        self.check_oauth.start()
 
     @commands.Cog.listener("on_button_click")
     @error_handler()
@@ -30,10 +30,10 @@ class OauthCog(commands.Cog):
             "In a private browser window, log into the webcage SoundCloud.",
             "Right-click anywhere on the page and click 'Inspect'.",
             "",
-            "In Chrome or Chrome-like browsers:",
+            "**In Chrome or Chrome-like browsers:**",
             "- Select `Application` in the new window that opens.",
             "- Under the `Storage` header on the left side, click `Cookies`.",
-            "In Firefox:",
+            "**In Firefox:**",
             "- Select the `Storage` tab.",
             "- Open the `Cookies` header.",
             "",
@@ -83,7 +83,7 @@ class OauthCog(commands.Cog):
             await inter.followup.send(
                 ephemeral=True,
                 embed=embeds.success(
-                    "Token works! Please don't share it with anybody.")
+                    "That works! Please don't share the token with anybody.")
             )
             return
 
@@ -109,15 +109,6 @@ class OauthCog(commands.Cog):
 
         return True
 
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message):
-        self.sc.oauth_token = "ballspenis"
-        try:
-            await self.sc.routes["me"].run(retry=True)
-        except aiohttp.ClientResponseError as e:
-            if e.status != 401:
-                raise e
-
     @tasks.loop(hours=3.0)
     async def check_oauth(self):
         if not await self.test_token():
@@ -125,6 +116,7 @@ class OauthCog(commands.Cog):
             for guild in self.bot.guilds:
                 self.messages.append(
                     await send_error(
+                        guild=guild,
                         embed=embeds.error(
                             title="SoundCloud OAuth Token Expired",
                             msg="If you're an administrator, please click the "
@@ -132,14 +124,16 @@ class OauthCog(commands.Cog):
                         components=[buttons.oauth_instructions()]
                 ))
 
-
-    @commands.slash_command(
-        dm_permission=False,
-        default_member_permissions=disnake.Permissions.none())
-    @error_handler()
-    async def invalidate_token(self, inter: disnake.ApplicationCommandInteraction):
-        self.sc.oauth_token = "notatoken"
-        await inter.response.send_message(
-            ephemeral=True,
-            embed=embeds.success("Invalidated!")
-        )
+    # @commands.slash_command(
+    #     dm_permission=False,
+    #     default_member_permissions=disnake.Permissions.none())
+    # @error_handler()
+    # async def invalidate_token(self, inter: disnake.ApplicationCommandInteraction):
+    #     """
+    #     Invalidates the SoundCloud token. Used for testing purposes.
+    #     """
+    #     self.sc.oauth_token = "notatoken"
+    #     await inter.response.send_message(
+    #         ephemeral=True,
+    #         embed=embeds.success("Invalidated!")
+    #     )
