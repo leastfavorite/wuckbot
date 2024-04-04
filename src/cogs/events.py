@@ -1,5 +1,7 @@
-from disnake.ext import commands
 import disnake
+import aiohttp
+
+from disnake.ext import commands
 from datetime import datetime
 
 from ..utils import error_handler, UserError, embeds, buttons, get_blame
@@ -123,19 +125,35 @@ class EventCog(commands.Cog):
     async def handle_track_delete(self,
                                   inter: disnake.MessageInteraction,
                                   s_id: int, token: str):
-        track = await self.sc.fetch_track(s_id, token)
-        if not track:
-            raise UserError("Track not found! Maybe it was already deleted?")
+        try:
+            track = await self.sc.fetch_track(s_id, token)
+        except aiohttp.ClientResponseError as e:
+            if e.status == 404:
+                raise UserError(
+                    "Track not found! Maybe it was already deleted?")
+            raise e
 
         title = track.title
         await track.delete()
 
         # delete the "delete" button
-        msg = await inter.original_response()
-        comp = [c for c in msg.components
-                if not c.custom_id.startswith("trackdelete")]
+        def replace_component(component):
+            if component.type != disnake.ComponentType.button:
+                raise NotImplementedError(
+                    "track delete is not powerful enough!")
+            return disnake.ui.Button.from_component(component)
 
-        await inter.response.edit_message(components=comp)
+        components = inter.message.components
+        components = [[
+            replace_component(c) for c in row.children
+            if not c.custom_id.startswith("trackdelete")]
+                      for row in components]
+
+        # if no buttons, just delete all components
+        if sum(map(len, components)) == 0:
+            components = None
+
+        await inter.response.edit_message(components=components)
 
         await inter.followup.send(
             embed=embeds.success(

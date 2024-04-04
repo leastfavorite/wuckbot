@@ -7,9 +7,10 @@ import asyncio
 from ..utils import embeds, error_handler, UserError, get_audio_attachment
 from ..filemethods import state
 from ..datatypes import Wip, Sketch
+from .. import soundcloud
 
 class ArchiveCog(commands.Cog):
-    def __init__(self, bot: commands.InteractionBot):
+    def __init__(self, bot: commands.InteractionBot, sc: soundcloud.Client):
         self.bot = bot
         self.last_loop: datetime = disnake.utils.utcnow()
         self.loop.start()
@@ -118,7 +119,31 @@ class ArchiveCog(commands.Cog):
         # remove wip from state
         state().wips = [w for w in state().wips if w.channel != wip.channel]
 
-        # TODO: if soundcloud track, move it to the archive playlist
+        # if soundcloud track, move it to the archive playlist
+        track = wip.track
+        if track:
+            archive_playlist = None
+            wips_playlist = None
+            async for pl in track.sc.me.playlists():
+                if pl.title.lower() == "archive":
+                    archive_playlist = pl
+                if pl.title.lower() == "wips":
+                    wips_playlist = pl
+
+                if archive_playlist and wips_playlist:
+                    break
+            else:
+                if not archive_playlist:
+                    raise UserError(
+                        "Could not find a playlist named 'archive'.")
+                if not wips_playlist:
+                    raise UserError(
+                        "Could not find a playlist named 'wips'.")
+
+            if track in wips_playlist:
+                await wips_playlist.remove_track(track)
+
+            await archive_playlist.add_track(track, top=True)
 
         # remove the wip role
         await wip.role.delete(reason="wip archival")
@@ -160,7 +185,7 @@ class ArchiveCog(commands.Cog):
         embed = disnake.Embed(
             color=disnake.Color.blurple(),
             timestamp=sketch.timestamp,
-            title=f"{e} Archived Sketch: {sketch.channel.name} {e}")
+            title=f"{e} Archived Sketch: {sketch.channel.name}")
         embed.set_footer(icon_url=embeds.WUCK,
                          text="Last Updated")
 
@@ -200,10 +225,11 @@ class ArchiveCog(commands.Cog):
         """
         Archives a WIP or sketch channel.
         """
+        await inter.response.defer(ephemeral=True)
 
         if (wip := disnake.utils.get(state().wips, channel=inter.channel)):
             await self.archive_wip(wip)
-            await inter.response.send_message(
+            await inter.edit_original_response(
                 embed=embeds.success(
                     "This WIP has been archived, "
                     f"as requested by {inter.author.mention}."))

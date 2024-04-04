@@ -1,4 +1,4 @@
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, AsyncIterator
 from ..validator import Serializable
 
 if TYPE_CHECKING:
@@ -72,6 +72,27 @@ class User(ScObject):
         else:
             raise TypeError("Missing creator_subscriptions or badges")
         # TODO (possibly): check if we're following
+
+    async def playlists(self) -> AsyncIterator['Playlist']:
+        # parses the response from fetch_playlists
+        async def fetch_playlists(offset):
+            response = await self.sc.routes["fetch_playlists"].run(
+                s_id=self.s_id,
+                offset=offset)
+
+            playlists = [
+                Playlist(self.sc, **pl) for pl in response["collection"]]
+            more = bool(response["next_href"])
+            return playlists, more
+
+        # iterates through pagination
+        more = True
+        offset = 0
+        while more:
+            playlists, more = await fetch_playlists(offset)
+            for playlist in playlists:
+                yield playlist
+            offset += 10
 
 class Track(TrackOrPlaylist):
     def __init__(self, *args, tag_list: str, **kwargs):

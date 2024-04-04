@@ -44,7 +44,6 @@ class Route:
                     out[k] = kwargs[k]
                 continue
 
-            print(k, type(v))
             if isinstance(v, dict):
                 out[k] = cls._parse_args(v, **kwargs)
             elif isinstance(v, str):
@@ -160,5 +159,13 @@ def routes(client):
                                            "ids": Required,
                                            "playlistId": Required,
                                            "playlistSecretToken": NotRequired
-                                       })
+                                       }),
+
+        "fetch_playlists": Route(client, "get",
+                                 "/users/{s_id}/playlists_without_albums",
+                                 params={
+                                     "limit": 10,
+                                     "offset": Required,
+                                     "linked_partitioning": 1
+                                 }),
     }

@@ -2,6 +2,7 @@ from disnake.ext import commands
 import disnake
 
 import asyncio
+import aiohttp
 
 from ..utils import UserError, embeds, buttons, get_audio_attachment
 from ..datatypes import Wip, Update
@@ -68,8 +69,10 @@ class UpdateCog(commands.Cog):
 
         # by someone the webcage role
         author = await wip.channel.guild.get_or_fetch_member(e.user_id)
-        if not author or \
-                disnake.utils.get(author.roles, name="webcage") is None:
+        if not author:
+            return None
+
+        if disnake.utils.get(author.roles, name="webcage") is None:
             return
 
         async with self.update_lock:
@@ -80,12 +83,52 @@ class UpdateCog(commands.Cog):
                     and wip.update.file.id == msg.id:
                 return
 
+            def check(e_: disnake.RawReactionActionEvent):
+                assert(author)
+                return e_.user_id == author.id and \
+                    str(e_.emoji) == UPDATE_REACTION
+
             # and they don't un-react within 3 seconds
             async with wip.channel.typing():
-                await asyncio.sleep(3)
-                bells = disnake.utils.get(msg.reactions, emoji=UPDATE_REACTION)
-                if not bells or bells.count < 2:
+                try:
+                    # we loop here because we have to handle a situation like
+                    # this:
+                    # - user a reacts
+                    # - user b reacts
+                    # - user a unreacts
+                    # and correctly determine the person who requested the
+                    # update.
+                    while True:
+                        await self.bot.wait_for(
+                            "raw_reaction_remove",
+                            check=check, timeout=3)
+                        # we didn't time out, there's a reaction removal
+                        print("hi!")
+
+                        # see if anyone else reacted
+                        msg = await wip.channel.fetch_message(e.message_id)
+                        bells = disnake.utils.get(
+                            msg.reactions, emoji=UPDATE_REACTION)
+                        if not bells:
+                            return
+
+                        # find non-bot user in bells and run again
+                        async for user in bells.users():
+                            # we found a non-bot user
+                            if user != wip.guild.me:
+                                assert isinstance(user, disnake.Member)
+                                author = user
+                                break
+                        else:
+                            # all reactions were removed
+                            return
+
+                # message got deleted
+                except disnake.NotFound:
                     return
+                # reaction didn't get removed
+                except asyncio.TimeoutError:
+                    pass
 
             # update
             await self.create_update(author=author, file_msg=msg, wip=wip)
@@ -112,7 +155,24 @@ class UpdateCog(commands.Cog):
 
         guild = author.guild
 
+        async def remove_author_reaction():
+            if not (wip.update and wip.update.file == file_msg.id):
+                try:
+                    await file_msg.remove_reaction(
+                        emoji=UPDATE_REACTION, member=author)
+                except disnake.NotFound:
+                    pass
+
         try:
+            # get wips playlist
+            wips_playlist = None
+            async for pl in self.sc.me.playlists():
+                if pl.title.lower() == "wips":
+                    wips_playlist = pl
+                    break
+            else:
+                raise UserError("Could not find a playlist named 'wips'.")
+
             # get updates channel
             updates_channel = disnake.utils.get(
                 guild.text_channels, name="updates")
@@ -126,18 +186,15 @@ class UpdateCog(commands.Cog):
 
             # if we ended up with members w/o linked soundcloud, fail
             # until they link themselves
-            unlinked = wip.unlinked_members()
-            if unlinked:
-                mentions = "\n".join(m.mention for m in unlinked)
-                raise UserError(
-                    f"Unknown SoundCloud profiles for these users:\n"
-                    f"{mentions}\n"
-                    f"Use `/linksc` to register them."
-                )
+            wip.raise_on_unlinked_members()
 
             if wip.track:
                 await edit_status("Deleting old track...")
-                await wip.track.delete()
+                try:
+                    await wip.track.delete()
+                except aiohttp.ClientResponseError as e:
+                    if e.status != 404:
+                        raise e
 
             # upload to soundcloud
             await edit_status("Uploading new track...")
@@ -148,6 +205,7 @@ class UpdateCog(commands.Cog):
                 description=description,
                 tags="wip"
             )
+            await wips_playlist.add_track(wip.track, top=True)
 
             # send update message to #updates
             await edit_status(f"Sending to {updates_channel.mention}...")
@@ -164,7 +222,7 @@ class UpdateCog(commands.Cog):
 
             # send file in a separate message (just looks a bit better, imo)
             file = await file_msg.attachments[0].to_file()
-            await updates_channel.send(file=file)
+            await update_msg.reply(file=file)
 
             # save!
             wip.update = Update(
@@ -182,9 +240,12 @@ class UpdateCog(commands.Cog):
 
         except UserError as e:
             embed = embeds.error(e.args[0])
+            await remove_author_reaction()
             await reply.edit(embed=embed)
+
         except Exception as e:
             embed = embeds.error(
                 f"Unknown exception ({type(e).__name__}) raised. Tell Aria!")
             await reply.edit(embed=embed)
+            await remove_author_reaction()
             raise e

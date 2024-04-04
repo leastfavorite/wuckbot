@@ -24,8 +24,10 @@ class UserSerializer(Serializer[User]):
             return None
         try:
             return await self.client.fetch_user(obj)
-        except ClientResponseError:
-            return None
+        except ClientResponseError as e:
+            if e.status == 404:
+                return None
+            raise e
 
 @dataclass
 class TrackOrPlaylistSerializer(Serializer[Union[Track, Playlist]]):
@@ -55,8 +57,10 @@ class TrackOrPlaylistSerializer(Serializer[Union[Track, Playlist]]):
             if issubclass(Target, Playlist):
                 return await self.client.fetch_playlist(int(s_id), token)
             return None
-        except ClientResponseError:
-            return None
+        except ClientResponseError as e:
+            if e.status == 404:
+                return None
+            raise e
 
 def serializers(client: Client):
     return [

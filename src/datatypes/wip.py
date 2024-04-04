@@ -1,5 +1,7 @@
 import disnake
 import asyncio
+import aiohttp
+
 from typing import Optional, Annotated, Union
 from datetime import datetime
 
@@ -13,15 +15,10 @@ class Update(TypedDict):
     message: disnake.Message
     timestamp: datetime
 
-    # TODO
     @without("message")
     async def without_message(self):
         pass
 
-    # TODO
-    @without("track")
-    async def without_track(self):
-        pass
 
 class Credit(TypedDict):
     producers: Annotated[list[disnake.User], list]
@@ -259,6 +256,16 @@ class Wip(TypedDict):
         else:
             channel = await guild.create_text_channel(**kwargs)
 
+        if track:
+            # find wip playlist
+            playlist = None
+            async for pl in track.sc.me.playlists():
+                if pl.title.lower() == "wips":
+                    playlist = pl
+                    break
+            if playlist:
+                await playlist.add_track(track, top=True)
+
         # create the wip
         wip = await Wip.create(
             name=name,
@@ -375,10 +382,17 @@ class Wip(TypedDict):
         return "\n".join(
             ["featuring:", *vocalists, "\nproduced by:", *producers])
 
-    def unlinked_members(self):
-        members = set(*self.credit.vocalists, *self.credit.producers)
+    def raise_on_unlinked_members(self):
+        members = set(self.credit.vocalists + self.credit.producers)
         linked = set(x.discord for x in state().links)
-        return members - linked
+        unlinked = members - linked
+        if not unlinked:
+            return
+
+        raise UserError(
+            "The following members do not have linked SoundCloud accounts:\n" +
+            ", ".join(m.mention for m in unlinked) +
+            "\nUse `/linksc` to link their accounts.")
 
     async def edit(self, *,
                    name: Optional[str] = None,
@@ -393,6 +407,9 @@ class Wip(TypedDict):
         if progress is not None:
             progress = self._validate_progress(progress)
 
+        if self.track:
+            self.raise_on_unlinked_members()
+
         self.name = name or self.name
         self.progress = progress or self.progress
 
@@ -404,9 +421,20 @@ class Wip(TypedDict):
             await self.update.message.edit(embed=self.update_embed())
 
         if self.track:
-            await self.track.edit(
-                title=name,
-                description=self.soundcloud_description()
-            )
+            try:
+                await self.track.edit(
+                    title=name,
+                    description=self.soundcloud_description()
+                )
+            except aiohttp.ClientResponseError as e:
+                if e.status == 404:
+                    self.track = None
+                    await self.channel.send(
+                        embed=embeds.error(
+                            "Could not find SoundCloud track. "
+                            "Maybe it was deleted?")
+                    )
+                else:
+                    raise e
 
         await self.update_pinned()

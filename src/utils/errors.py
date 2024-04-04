@@ -18,11 +18,11 @@ __all__ = [
     'UserSuccess',
 ]
 
-def _error_channel(guild: disnake.Guild) -> Optional[disnake.TextChannel]:
-    return disnake.utils.get(guild.text_channels, name="bot-errors")
+def _updates_channel(guild: disnake.Guild) -> Optional[disnake.TextChannel]:
+    return disnake.utils.get(guild.text_channels, name="updates")
 
 async def send_error(guild: Optional[disnake.Guild], **kwargs):
-    if guild and (channel := _error_channel(guild)):
+    if guild and (channel := _updates_channel(guild)):
         await channel.send(**kwargs)
         return
     await Secrets().admin.send(**kwargs)
@@ -60,7 +60,7 @@ async def send_exception_embed(
         return
 
     footer = ""
-    channel = _error_channel(guild)
+    channel = disnake.utils.get(guild.text_channels, name="bot-errors")
     if not channel:
         footer += "Make a #bot-errors channel! "
 
