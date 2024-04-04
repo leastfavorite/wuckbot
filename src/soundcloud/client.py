@@ -51,7 +51,7 @@ class Client:
         if self.client_id is None:
             raise RuntimeError("Could not parse out a client id")
 
-        self.me: User = await self.routes["me"].run()
+        self.me = await self.routes["me"].run(retry=False)
 
     @classmethod
     async def create(cls, oauth_token: str):

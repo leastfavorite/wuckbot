@@ -5,6 +5,7 @@ from .update import UpdateCog
 from .events import EventCog
 from .sketch import SketchCog
 from .archive import ArchiveCog
+from .oauth import OauthCog
 
 __all__ = [
     'WipCog',
@@ -13,5 +14,6 @@ __all__ = [
     'UpdateCog',
     'EventCog',
     'SketchCog',
-    'ArchiveCog'
+    'ArchiveCog',
+    'OauthCog'
 ]

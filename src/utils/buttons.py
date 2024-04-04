@@ -66,3 +66,19 @@ def new_sketch():
         style=disnake.ButtonStyle.primary,
         custom_id="sketchnew"
     )
+
+def oauth_instructions():
+    return disnake.ui.Button(
+        label="I'm an administrator",
+        emoji="\N{GEAR}",
+        style=disnake.ButtonStyle.success,
+        custom_id="oauthinstruction"
+    )
+
+def oauth_modal():
+    return disnake.ui.Button(
+        label="I have the token",
+        emoji="\N{COIN}",
+        style=disnake.ButtonStyle.success,
+        custom_id="oauthprovide"
+    )
