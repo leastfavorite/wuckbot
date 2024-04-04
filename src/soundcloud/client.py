@@ -1,6 +1,7 @@
 from typing import Union, Optional
 from urllib.parse import urlparse
 
+import asyncio
 import aiohttp
 import re
 
@@ -12,6 +13,7 @@ class Client:
         self.http = aiohttp.ClientSession()
         self.oauth_token = oauth_token
         self.client_id = None
+        self.oauth_expire_callbacks = []
         self.routes = routes(self)
 
     async def close(self):
@@ -43,6 +45,12 @@ class Client:
 
         return None
 
+    def register_oauth_expire_callback(self, f):
+        self.oauth_expire_callbacks.append(f)
+
+    async def on_oauth_expire(self):
+        asyncio.gather(*(f() for f in self.oauth_expire_callbacks))
+
     # try to refresh all the "dynamic" elements of the soundcloud bot that
     # are needed to run.. the client_id and user account can change without
     # us knowing, and it might break stuff
@@ -51,7 +59,12 @@ class Client:
         if self.client_id is None:
             raise RuntimeError("Could not parse out a client id")
 
-        self.me = await self.routes["me"].run(retry=False)
+        try:
+            self.me = await self.routes["me"].run(retry=False)
+        except aiohttp.ClientResponseError as e:
+            if e.status == 401:
+                await self.on_oauth_expire()
+            raise e
 
     @classmethod
     async def create(cls, oauth_token: str):

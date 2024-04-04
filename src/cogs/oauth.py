@@ -13,6 +13,8 @@ class OauthCog(commands.Cog):
         self.messages: list[disnake.Message] = []
         self.check_oauth.start()
 
+        self.sc.register_oauth_expire_callback(self.on_oauth_expire)
+
     @commands.Cog.listener("on_button_click")
     @error_handler()
     async def on_button_click(self, inter: disnake.MessageInteraction):
@@ -52,8 +54,6 @@ class OauthCog(commands.Cog):
             components=[buttons.oauth_modal()])
 
     async def handle_provide(self, inter: disnake.MessageInteraction):
-        original_message = inter.message
-
         modal = await send_modal(
             inter,
             title="Enter Token",
@@ -70,20 +70,20 @@ class OauthCog(commands.Cog):
         token: str = modal.token.strip()
 
         if await self.test_token(token):
+            self.sc.oauth_token = token
             # token found!! it's already applied, just delete all
             # calls to action and return
             try:
-                await original_message.delete()
-                for msg in self.messages:
+                for msg in reversed(self.messages):
                     await msg.delete()
-                    del self.messages[msg]
+                    self.messages.remove(msg)
             except (disnake.Forbidden, disnake.NotFound):
                 pass
 
             await inter.followup.send(
                 ephemeral=True,
                 embed=embeds.success(
-                    "That works! Please don't share the token with anybody.")
+                    "Thank you! Please don't share the token with anybody.")
             )
             return
 
@@ -94,46 +94,31 @@ class OauthCog(commands.Cog):
         )
 
     async def test_token(self, token: str = None):
-        if token:
-            old_token = self.sc.oauth_token
-            self.sc.oauth_token = token
-
         try:
-            await self.sc.routes["me"].run(retry=True)
+            await self.sc.routes["me"].run(retry=True, oauth_token=token)
         except aiohttp.ClientResponseError as e:
-            if token:
-                self.sc.oauth_token = old_token
             if e.status == 401:
                 return False
             raise e
-
         return True
+
+    async def on_oauth_expire(self):
+        # send to every guild
+        for guild in self.bot.guilds:
+            self.messages.append(
+                await send_error(
+                    guild=guild,
+                    embed=embeds.error(
+                        title="SoundCloud OAuth Token Expired",
+                        msg="If you're an administrator, please click the "
+                            "button below to provide a new token."),
+                    components=[buttons.oauth_instructions()]
+            ))
 
     @tasks.loop(hours=3.0)
     async def check_oauth(self):
-        if not await self.test_token():
-            # send to every guild
-            for guild in self.bot.guilds:
-                self.messages.append(
-                    await send_error(
-                        guild=guild,
-                        embed=embeds.error(
-                            title="SoundCloud OAuth Token Expired",
-                            msg="If you're an administrator, please click the "
-                                "button below to provide a new token."),
-                        components=[buttons.oauth_instructions()]
-                ))
+        await self.test_token()
 
-    # @commands.slash_command(
-    #     dm_permission=False,
-    #     default_member_permissions=disnake.Permissions.none())
-    # @error_handler()
-    # async def invalidate_token(self, inter: disnake.ApplicationCommandInteraction):
-    #     """
-    #     Invalidates the SoundCloud token. Used for testing purposes.
-    #     """
-    #     self.sc.oauth_token = "notatoken"
-    #     await inter.response.send_message(
-    #         ephemeral=True,
-    #         embed=embeds.success("Invalidated!")
-    #     )
+    @check_oauth.before_loop
+    async def before_check(self):
+        await self.bot.wait_until_ready()

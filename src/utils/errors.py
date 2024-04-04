@@ -23,9 +23,8 @@ def _updates_channel(guild: disnake.Guild) -> Optional[disnake.TextChannel]:
 
 async def send_error(guild: Optional[disnake.Guild], **kwargs):
     if guild and (channel := _updates_channel(guild)):
-        await channel.send(**kwargs)
-        return
-    await Secrets().admin.send(**kwargs)
+        return await channel.send(**kwargs)
+    return await Secrets().admin.send(**kwargs)
 
 # Represents an error caused by malformed user input.
 class UserError(Exception):

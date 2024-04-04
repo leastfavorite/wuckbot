@@ -62,9 +62,10 @@ class Route:
         if self.json:
             json = self._parse_args(self.json, **kwargs)
 
+        oauth_token = kwargs.get("oauth_token") or self.sc.oauth_token
         headers = {
             "Accept": "application/json",
-            "Authorization": f"OAuth {self.sc.oauth_token}"
+            "Authorization": f"OAuth {oauth_token}"
         }
 
         json = {} if json is None else {"json": json}
