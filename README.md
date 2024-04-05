@@ -131,7 +131,8 @@ minutes.
 > gabby and 4kmirage agree--this *shouldn't* be a WIP yet. instead of making a
 > private channel, they keep it public. they decide that they'll work on it for
 > now, and if they like it, they'll turn it into a full WIP. otherwise, they'll
-> archive the files somewhere and delete the channel.
+> archive the files somewhere and delete the channel. for now, they call it
+> a "sketch".
 
 this setup--one song per private channel, with special roles, updates,
 archival, and sketches--*this* is the organizational setup that wuckbot seeks
