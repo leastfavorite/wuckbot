@@ -45,15 +45,6 @@ class WipsCog(commands.Cog):
         wips = [wip.name for wip in state().wips]
         return [name for name in wips if user_input.lower() in name.lower()]
 
-    def get_view_components(self, author: disnake.Member, index: int):
-        wip: Wip = state().wips[index]
-
-        return [
-            buttons.wip_view_prev(index - 1),
-            buttons.wip_toggle(wip, author),
-            buttons.wip_view_next(index + 1)
-        ]
-
     @wips.sub_command()
     @error_handler()
     async def view(
@@ -79,7 +70,11 @@ class WipsCog(commands.Cog):
         await inter.response.send_message(
             ephemeral=True,
             embed=wip_.view_embed(),
-            components=self.get_view_components(inter.author, index))
+            components=[
+                buttons.wip_view_prev(index - 1),
+                buttons.wip_toggle(wip_, inter.author),
+                buttons.wip_view_next(index + 1)
+            ])
 
     @staticmethod
     async def join_autocomplete(inter: disnake.AppCommandInteraction,

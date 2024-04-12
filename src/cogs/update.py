@@ -11,11 +11,6 @@ from .. import soundcloud
 
 UPDATE_REACTION = "\N{BELL}"
 
-STATE_MANIFEST = {
-    "soundclouds": dict[disnake.User, soundcloud.User]
-}
-
-
 class UpdateCog(commands.Cog):
     def __init__(self,
                  bot: commands.InteractionBot, sc: soundcloud.Client):

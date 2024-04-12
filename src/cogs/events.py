@@ -60,16 +60,11 @@ class EventCog(commands.Cog):
 
     async def handle_wip_toggle(self,
                                 inter: disnake.MessageInteraction,
-                                index: int):
+                                id_: int):
 
-        # keep index within bounds
-        num_wips = len(state().wips)
-        if index < 0:
-            index = 0
-        if index >= num_wips:
-            index = num_wips - 1
-
-        wip = state().wips[index]
+        wip = disnake.utils.get(state().wips, channel__id=id_)
+        if not wip:
+            raise UserError("This WIP has been deleted.")
 
         # add to WIP
         if wip.role in inter.author.roles:
