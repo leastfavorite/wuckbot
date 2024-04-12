@@ -6,36 +6,41 @@ import asyncio
 
 from inspect import signature
 
-from .datatypes import Secrets, State
+from .datatypes import Tokens, Config, State
 from . import validator, soundcloud, cogs
 
-SECRETS_FILENAME = "secrets.json"
+CONFIG_FILENAME = "config.json"
 STATE_FILENAME = "state.json"
-COGS_FOLDER = "src/cogs"
+TOKENS_FILENAME = "tokens.json"
 
 def main():
     loop = asyncio.new_event_loop()
 
-    # we have to hack some initialization stuff out of the secrets file
+    # we have to hack some initialization stuff out of the config files
     # because we can't get it as a fancy object until the bot is started
-    with open(SECRETS_FILENAME, "r") as fp:
-        secrets = json.load(fp)
-    bot_token = secrets["bot_token"]
-    test_guilds = secrets["guilds"]
-    oauth_token = secrets["sc_oauth"]
-    del secrets
+    with open(CONFIG_FILENAME, "r") as fp:
+        config = json.load(fp)
+    guild = config["guild"]
+
+    with open(TOKENS_FILENAME, "r") as fp:
+        tokens = json.load(fp)
+    discord_token = tokens["discord"]
+    soundcloud_token = tokens["soundcloud"]
+
+    del config, tokens
 
     intents = disnake.Intents.default()
     intents.members = True
     intents.message_content = True
+
     bot = commands.InteractionBot(
         intents=intents,
-        test_guilds=test_guilds,
+        test_guilds=[guild],
         loop=loop)
-    on_close = []
 
+    on_close = []
     async def _on_ready():
-        sc = await soundcloud.Client.create(oauth_token)
+        sc = await soundcloud.Client.create(soundcloud_token)
         on_close.append(sc.close())
 
         registrar = validator.Registrar(
@@ -45,11 +50,14 @@ def main():
         )
 
         # load json
-        await State.load("state.json", "backups/state", registrar)
+        await State.load(STATE_FILENAME, "backups/state", registrar)
         on_close.append(State().save())
 
-        await Secrets.load("secrets.json", "backups/secrets", registrar)
-        on_close.append(Secrets().save())
+        await Config.load(CONFIG_FILENAME, "backups/config", registrar)
+        on_close.append(Config().save())
+
+        await Tokens.load(TOKENS_FILENAME, "backups/tokens", registrar)
+        on_close.append(Tokens().save())
 
         for cog_name in cogs.__all__:
             Cog = getattr(cogs, cog_name)
@@ -69,7 +77,7 @@ def main():
 
     async def runner() -> None:
         try:
-            await bot.start(token=bot_token)
+            await bot.start(token=discord_token)
         finally:
             if not bot.is_closed():
                 await bot.close()
@@ -112,9 +120,9 @@ def main():
 
 
 async def soundcloud_test():
-    with open(SECRETS_FILENAME, "r") as fp:
-        secrets = json.load(fp)
-    oauth_token = secrets["sc_oauth"]
+    with open(TOKENS_FILENAME, "r") as fp:
+        tokens = json.load(fp)
+    oauth_token = tokens["soundcloud"]
     sc = await soundcloud.Client.create(oauth_token)
 
     await sc.close()

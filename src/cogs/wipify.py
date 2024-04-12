@@ -4,7 +4,7 @@ from disnake.ext import commands
 from ..utils import embeds, buttons, send_modal, error_handler, UserError, get_audio_attachment
 from ..datatypes import Wip
 from .. import soundcloud
-from ..filemethods import state
+from ..filemethods import state, config
 
 
 class WipifyCog(commands.Cog):
@@ -128,16 +128,10 @@ class WipifyCog(commands.Cog):
 
         # create modal
         if not attachment:
-            sketchpad = disnake.utils.get(
-                guild.text_channels, name="sketchpad")
-
-            if sketchpad is not None:
-                raise UserError(
-                    "Use this command on a message with an audio file.\n"
-                    f"If you're starting a song, use {sketchpad.mention}.")
-            else:
-                raise UserError(
-                    "Use this command on a message with an audio file.")
+            sketchpad = await config().channels.new_sketch.get(guild)
+            raise UserError(
+                "Use this command on a message with an audio file.\n"
+                f"If you're starting a song, use {sketchpad.mention}.")
 
         modal = await self._send_wip_modal(
             inter,

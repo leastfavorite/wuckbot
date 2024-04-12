@@ -1,9 +1,10 @@
-from .filemethods import state, secrets
+from .filemethods import state, config, tokens
 from . import soundcloud, utils, datatypes, validator
 
 __all__ = [
     "state",
-    "secrets",
+    "config",
+    "tokens",
     "soundcloud",
     "utils",
     "datatypes",

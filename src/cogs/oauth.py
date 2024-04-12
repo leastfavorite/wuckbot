@@ -94,7 +94,7 @@ class OauthCog(commands.Cog):
         )
 
     # TODO: honestly this should should be in soundcloud.Client
-    async def test_token(self, token: str = None):
+    async def test_token(self, token: str | None = None):
         try:
             await self.sc.routes["me"].run(retry=True, oauth_token=token)
         except aiohttp.ClientResponseError as e:

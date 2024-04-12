@@ -308,7 +308,7 @@ class EventCog(commands.Cog):
                     await wip.channel.send(embed=embed)
                     await wip.edit()
 
-        state().links = [x for x in state().links if x.discord != user]
+        del state().links[user]
 
     # message deleted (check if pinned)
     # message deleted (check if most recent update)

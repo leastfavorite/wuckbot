@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Type
 
 from ..serializer import Serializer, Serializable
+from ..guild_element_by_name import GuildElementByName
 
 @dataclass
 class GuildSerializer(Serializer[disnake.Guild]):
@@ -185,11 +186,26 @@ class MessageSerializer(Serializer[disnake.Message]):
         except (disnake.NotFound, disnake.Forbidden):
             return None
 
+class GuildElementByNameSerializer(Serializer[GuildElementByName]):
+    def supports(self, Target: type) -> bool:
+        return isinstance(Target, GuildElementByName)
+
+    async def serialize(self, obj: GuildElementByName, Target: type):
+        if isinstance(obj, GuildElementByName):
+            return obj.name
+        return None
+
+    async def deserialize(self, obj: Serializable, Target: type):
+        if not isinstance(obj, str):
+            return None
+        return Target(obj)
+
 def disnake_serializers(bot: disnake.Client) -> list[Serializer]:
     return [
         GuildSerializer(bot),
         UserSerializer(bot),
         ChannelSerializer(),
         RoleSerializer(),
-        MessageSerializer()
+        MessageSerializer(),
+        GuildElementByNameSerializer()
     ]

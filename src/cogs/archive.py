@@ -5,7 +5,7 @@ import calendar
 
 import asyncio
 from ..utils import embeds, error_handler, UserError, get_audio_attachment
-from ..filemethods import state
+from ..filemethods import state, config
 from ..datatypes import Wip, Sketch
 from .. import soundcloud
 
@@ -103,23 +103,16 @@ class ArchiveCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def archive_wip(self, wip: Wip):
-        archive_category = disnake.utils.find(
-            lambda c: c.name.lower() == "archive", wip.guild.categories)
-        if not archive_category:
-            raise UserError("Couldn't find a category called `archive`.")
-
-        view_archive = disnake.utils.get(wip.guild.roles, name="view archive")
-        if not view_archive:
-            raise UserError("Couldn't find a role called `view archive`.")
-
-        webcage_role = disnake.utils.get(wip.guild.roles, name="webcage")
-        if not webcage_role:
-            raise UserError("Couldn't find a role called `webcage`.")
+        archive_category = await config().categories.archive.get(wip.guild)
+        view_archive = await config().roles.view_archive.get(wip.guild)
+        bandmate_role = await config().roles.band_member.get(wip.guild)
 
         # remove wip from state
         state().wips = [w for w in state().wips if w.channel != wip.channel]
 
         # if soundcloud track, move it to the archive playlist
+
+        # TODO: ByName for soundcloud stuff, too
         track = wip.track
         if track:
             archive_playlist = None
@@ -135,10 +128,10 @@ class ArchiveCog(commands.Cog):
             else:
                 if not archive_playlist:
                     raise UserError(
-                        "Could not find a playlist named 'archive'.")
+                        "Could not find a SoundCloud playlist named 'archive'.")
                 if not wips_playlist:
                     raise UserError(
-                        "Could not find a playlist named 'wips'.")
+                        "Could not find a SoundCloud playlist named 'wips'.")
 
             if track in wips_playlist:
                 await wips_playlist.remove_track(track)
@@ -154,7 +147,7 @@ class ArchiveCog(commands.Cog):
             category=archive_category,
             overwrites={
                 wip.guild.default_role: disnake.PermissionOverwrite(view_channel=False),
-                webcage_role: disnake.PermissionOverwrite(
+                bandmate_role: disnake.PermissionOverwrite(
                     view_channel=False,
                     manage_channels=False),
                 view_archive: disnake.PermissionOverwrite(view_channel=True)
@@ -163,11 +156,7 @@ class ArchiveCog(commands.Cog):
         await wip.channel.move(offset=1, beginning=True)
 
         # create an embed in #updates
-        updates = disnake.utils.get(
-            wip.guild.text_channels, name="updates")
-        if updates is None:
-            raise UserError("Could not find a #updates channel.")
-
+        updates = await config().channels.updates.get(wip.guild)
         await updates.send(embed=wip.archive_embed())
 
     async def archive_sketch(self, sketch: Sketch):
@@ -177,9 +166,7 @@ class ArchiveCog(commands.Cog):
 
         guild = sketch.channel.guild
 
-        archive = disnake.utils.get(guild.text_channels, name="sketch-archive")
-        if not archive:
-            raise UserError("`#sketch-archive` channel does not exist.")
+        archive = await config().channels.sketch_archive.get(guild)
 
         e = "\N{OPEN FILE FOLDER}"
         embed = disnake.Embed(
@@ -251,9 +238,7 @@ class ArchiveCog(commands.Cog):
         """
         Toggles access to archive channels.
         """
-        view_archives_role = disnake.utils.get(inter.guild.roles, name="view archive")
-        if view_archives_role is None:
-            raise UserError("Couldn't find a role called `view archive`.")
+        view_archives_role = config().roles.view_archive.get(inter.guild)
 
         if view_archives_role in inter.author.roles:
             await inter.author.remove_roles(view_archives_role)

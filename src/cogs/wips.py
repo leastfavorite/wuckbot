@@ -5,7 +5,7 @@ from typing import Optional
 
 from ..utils import error_handler, UserError, embeds, buttons
 from ..datatypes import Wip
-from .. import state
+from .. import state, config
 
 class WipsCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
@@ -23,9 +23,7 @@ class WipsCog(commands.Cog):
         """
         Toggles access to all WIP channels.
         """
-        view_wips_role = disnake.utils.get(inter.guild.roles, name="view wips")
-        if view_wips_role is None:
-            raise UserError("Couldn't find a role called 'view wips'")
+        view_wips_role = await config().roles.view_wips.get(inter.guild)
 
         if view_wips_role in inter.author.roles:
             await inter.author.remove_roles(view_wips_role)

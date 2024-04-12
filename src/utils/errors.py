@@ -7,23 +7,27 @@ import traceback
 
 import asyncio
 
-from .embeds import error, success, WUCK
-
-def Secrets():
-    from ..datatypes import Secrets
-    return Secrets()
-
-def _updates_channel(guild: disnake.Guild) -> Optional[disnake.TextChannel]:
-    return disnake.utils.get(guild.text_channels, name="updates")
-
-async def send_error(guild: Optional[disnake.Guild], **kwargs):
-    if guild and (channel := _updates_channel(guild)):
-        return await channel.send(**kwargs)
-    return await Secrets().admin.send(**kwargs)
+from .embeds import error, WUCK
+from ..filemethods import config
 
 # Represents an error caused by malformed user input.
 class UserError(Exception):
     pass
+
+async def send_error(guild: Optional[disnake.Guild], **kwargs):
+    channel = None
+    if guild:
+        try:
+            channel = await config().channels.updates.get(guild)
+        except UserError:
+            pass
+
+    admin = config().admin
+
+    if channel:
+        return await channel.send(**kwargs)
+    if admin:
+        return await admin.send(**kwargs)
 
 async def send_exception_embed(
         e: Exception, guild: Optional[disnake.Guild] = None,
@@ -44,18 +48,21 @@ async def send_exception_embed(
 
     content = ""
 
-    admin = Secrets().admin
+    admin = config().admin
     if not guild:
-        await admin.send(embed=embed)
+        if admin:
+            await admin.send(embed=embed)
         return
 
     footer = ""
-    channel = disnake.utils.get(guild.text_channels, name="bot-errors")
-    if not channel:
-        footer += "Make a #bot-errors channel! "
 
-    admin = Secrets().admin
-    if guild not in admin.mutual_guilds:
+    channel = None
+    try:
+        channel = await config().channels.errors.get(guild)
+    except UserError:
+        footer += f"Make a #{config().channels.errors.name} channel! "
+
+    if not admin or guild not in admin.mutual_guilds:
         footer += "Where is your admin?"
     else:
         content = admin.mention
@@ -71,6 +78,7 @@ async def send_exception_embed(
 
 
 # TODO should have special case for handling oauth issues
+# TODO and probably a special error for the *ByName classes to give Not Founds?
 async def exc_embed(e: Exception,
                  guild: Optional[disnake.Guild] = None,
                  author: Optional[disnake.User] = None,

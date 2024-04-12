@@ -2,7 +2,7 @@ import disnake
 from disnake.ext import commands
 
 from ..utils import embeds, error_handler, UserError, send_modal
-from ..datatypes import Wip, LinkedUser
+from ..datatypes import Wip
 from .. import soundcloud, state
 
 from typing import Optional
@@ -165,7 +165,7 @@ class WipCog(commands.Cog):
                 response = f"You have been removed as a {credit_type}."
         else:
             # check if soundcloud is available
-            if user._user not in (x.discord for x in state().links):
+            if user not in state().links.keys():
                 await self.link_soundcloud(inter, user)
 
             credit_list.append(user)
@@ -196,12 +196,10 @@ class WipCog(commands.Cog):
         if type(sc_user) is not soundcloud.User:
             raise UserError("Could not resolve the provided link.")
 
-        state().links = [x for x in state().links if x.discord != user]
         discord_user = \
             user._user if isinstance(user, disnake.Member) else user
-        state().links.append(
-            await LinkedUser.create(discord=discord_user, sc=sc_user))
 
+        state().links[discord_user] = sc_user
         return sc_user
 
     @commands.slash_command(

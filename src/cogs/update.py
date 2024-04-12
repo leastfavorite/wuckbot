@@ -6,7 +6,7 @@ import aiohttp
 
 from ..utils import UserError, embeds, buttons, get_audio_attachment
 from ..datatypes import Wip, Update
-from ..filemethods import state
+from ..filemethods import state, config
 from .. import soundcloud
 
 UPDATE_REACTION = "\N{BELL}"
@@ -62,12 +62,13 @@ class UpdateCog(commands.Cog):
                 not msg.attachments[0].content_type.startswith("audio"):
             return
 
-        # by someone the webcage role
+        # by someone in the band
         author = await wip.channel.guild.get_or_fetch_member(e.user_id)
         if not author:
             return None
 
-        if disnake.utils.get(author.roles, name="webcage") is None:
+        bandmate_role = await config().roles.band_member.get(wip.guild)
+        if bandmate_role not in author.roles:
             return
 
         async with self.update_lock:
@@ -168,11 +169,7 @@ class UpdateCog(commands.Cog):
             else:
                 raise UserError("Could not find a playlist named 'wips'.")
 
-            # get updates channel
-            updates_channel = disnake.utils.get(
-                guild.text_channels, name="updates")
-            if updates_channel is None:
-                raise UserError("Could not find a #updates channel.")
+            updates_channel = await config().channels.updates.get(guild)
 
             await edit_status(
                 "Getting SoundCloud accounts for credited members...")

@@ -68,24 +68,51 @@ class TypedDictMeta(type):
             cls._TD_DEFAULTS.update(getattr(base, "_TD_DEFAULTS", {}))
 
         annotateds = set()
+
+        def add_default(name, **kwargs):
+            if name in cls._TD_DEFAULTS:
+                del cls._TD_DEFAULTS[name]
+            cls._TD_DEFAULTS[name] = DefaultEntry(**kwargs)
+
         # find our own fields
         cls_annotations = inspect.get_annotations(cls)
         for name, type in cls_annotations.items():
+            # skip special annotations
             if name in ["_TD_FIELDS", "_TD_WITHOUTS", "_TD_DEFAULTS"]:
                 continue
 
             default = getattr(cls, name, MISSING)
 
+            # handle default factories through Annotated:
+            # Annotated[list, lambda: [4, 5]] should default to [4, 5]
             if typing.get_origin(type) is Annotated:
                 if default is not MISSING:
                     raise ValueError(
                         f"in {name}: default supplied for annotated")
                 type, default_factory = typing.get_args(type)
                 annotateds.add(name)
-                if name in cls._TD_DEFAULTS:
-                    del cls._TD_DEFAULTS[name]
-                cls._TD_DEFAULTS[name] = DefaultEntry(
-                    from_decorator=False, f=default_factory)
+                add_default(name, from_decorator=False, f=default_factory)
+
+            elif default is not MISSING:
+                # here, we don't provide a default OR a default factory.
+                # normally, we just error, but there are a few common cases
+                # that we should handle:
+
+                # if we don't provide an Annotated and expect a required,
+                # default-instantiable TypedDict, we just create the TypedDict
+                # automatically
+                if inspect.isclass(type) and \
+                    issubclass(type, TypedDict) and \
+                    type.default_instantiable():
+
+                    if default is not MISSING:
+                        continue
+
+                    add_default(name, from_decorator=False, f=default_factory)
+
+                elif (origin := typing.get_origin(type)) is not None and \
+                        issubclass(origin, (dict, list)):
+                    add_default(name, from_decorator=False, f=default_factory)
 
             cls._TD_FIELDS[name] = TdField(name, type, default)
 
@@ -105,21 +132,9 @@ class TypedDictMeta(type):
                     raise TypeError(
                         f"in {name}: "
                         f"{field_name} had both @default and annotated")
-
-                if field_name in cls._TD_DEFAULTS:
-                    del cls._TD_DEFAULTS[field_name]
-                cls._TD_DEFAULTS[field_name] = DefaultEntry(
-                    from_decorator=True, f=attr)
+                add_default(name, from_decorator=True, f=attr)
 
         return cls
-
-    # True if all fields have a default or default_factory
-    @property
-    def has_default(cls):
-        needs_factory = {
-            f.name for f in cls._TD_FIELDS.values() if f.default is MISSING}
-        factories = {cls._TD_DEFAULTS.keys()}
-        return len(needs_factory - factories) == 0
 
 Coerce: TypeAlias = Union[
     Callable[[Any, Type[T]], Optional[T]],
@@ -134,6 +149,14 @@ class TypedDict(metaclass=TypedDictMeta):
 
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+
+    # True if all fields have a default or default_factory
+    @classmethod
+    def default_instantiable(cls) -> bool:
+        needs_factory = {
+            f.name for f in cls._TD_FIELDS.values() if f.default is MISSING}
+        factories = {*cls._TD_DEFAULTS.keys()}
+        return len(needs_factory - factories) == 0
 
     @classmethod
     async def create(cls, **kwargs):
@@ -165,9 +188,8 @@ class TypedDict(metaclass=TypedDictMeta):
                 else:
                     init_kwargs[name] = coerced
             # then: find all defaults and try to coerce them
-            else:
-                if field.default is not MISSING:
-                    init_kwargs[name] = field.default
+            elif field.default is not MISSING:
+                init_kwargs[name] = field.default
 
         # then: check for fields without defaults/withouts and crash if they
         # aren't filled in.

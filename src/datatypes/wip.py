@@ -2,16 +2,16 @@ import disnake
 import asyncio
 import aiohttp
 
-from typing import Optional, Annotated, Union
+from typing import Annotated
 from datetime import datetime
 
 from ..validator import TypedDict, without, default
 from ..utils.errors import UserError, send_error
 from ..utils import embeds, buttons, get_blame, Blamed, get_collaborators
-from .. import soundcloud, state
+from .. import soundcloud, state, config
 
 class Update(TypedDict):
-    file: Optional[disnake.Message] = None
+    file: disnake.Message | None = None
     message: disnake.Message
     timestamp: datetime
 
@@ -21,14 +21,14 @@ class Update(TypedDict):
 
 
 class Credit(TypedDict):
-    producers: Annotated[list[disnake.User], list]
-    vocalists: Annotated[list[disnake.User], list]
+    producers: list[disnake.abc.User]
+    vocalists: list[disnake.abc.User]
 
 class Wip(TypedDict):
     # metadata
     name: str
     progress: int
-    credit: Annotated[Credit, Credit.create]
+    credit: Credit
 
     # discord stuff
     guild: disnake.Guild
@@ -36,10 +36,10 @@ class Wip(TypedDict):
     role: disnake.Role
     pinned: disnake.Message
 
-    track: Optional[soundcloud.Track] = None
+    track: soundcloud.Track | None = None
 
     # most recent update (if it exists)
-    update: Optional[Update] = None
+    update: Update | None = None
 
     # timestamp
     timestamp: Annotated[datetime, disnake.utils.utcnow]
@@ -77,6 +77,8 @@ class Wip(TypedDict):
                 "on a song anymore, use `/archive` instead.",
             title=f"WIP Channel '{self.name}' Deleted")
         components = [buttons.track_delete(self.track)] if self.track else None
+
+        # TODO handle Object
         content = author.mention if author else ""
 
         await send_error(
@@ -109,6 +111,7 @@ class Wip(TypedDict):
 
         await send_error(
             guild=self.guild,
+            # TODO handle Object
             content=author.mention if author else "",
             embed=embeds.error(
                 msg="Please don't delete WIP roles. If you don't want to work "
@@ -159,7 +162,7 @@ class Wip(TypedDict):
                 f"A role in this server already uses the name \"{name}\".")
 
     @staticmethod
-    def _validate_progress(progress: Union[str, int]) -> int:
+    def _validate_progress(progress: str | int) -> int:
         if isinstance(progress, str):
             progress_text = progress
             try:
@@ -175,10 +178,10 @@ class Wip(TypedDict):
     async def from_channel(
             cls, *,
             name: str,
-            progress: Union[str, int],
-            track: Optional[soundcloud.Track] = None,
-            existing_channel: Optional[disnake.TextChannel] = None,
-            extra_members: Optional[list[disnake.Member]] = None):
+            progress: str | int,
+            track: soundcloud.Track | None = None,
+            existing_channel: disnake.TextChannel | None = None,
+            extra_members: list[disnake.Member] | None = None):
 
         # get guild
         guild = None
@@ -199,18 +202,9 @@ class Wip(TypedDict):
                 raise UserError("This channel is already a WIP.")
 
         # get WIPs category
-        if not (category := disnake.utils.get(guild.categories, name="WIPs")):
-            raise UserError("Could not find a channel category called WIPs.")
-
-        # roles that are specifically denied access
-        # TODO: specific role name should be specifiable in config
-        if not (webcage := disnake.utils.get(guild.roles, name="webcage")):
-            raise UserError("Couldn't find a role called 'webcage'")
-
-        # roles that are allowed access
-        # TODO: specific role name should be specifiable in config
-        if not (view_wips := disnake.utils.get(guild.roles, name="view wips")):
-            raise UserError("Couldn't find a role called 'view wips'")
+        category = await config().categories.wip.get(guild)
+        bandmate = await config().roles.band_member.get(guild)
+        view_wips = await config().roles.view_wips.get(guild)
 
         # create new role for allowing access
         new_role = await guild.create_role(
@@ -232,8 +226,8 @@ class Wip(TypedDict):
         await asyncio.gather(
             *(m.add_roles(new_role, reason="/wipify") for m in members))
 
-        access_roles: set[Union[disnake.Member, disnake.Role]] = {view_wips, new_role, guild.me}
-        deny_roles: set[Union[disnake.Member, disnake.Role]] = {webcage, guild.default_role}
+        access_roles: set[disnake.Member | disnake.Role] = {view_wips, new_role, guild.me}
+        deny_roles: set[disnake.Member | disnake.Role] = {bandmate, guild.default_role}
 
         kwargs = {
             "name": cls._get_channel_name(name, progress),
@@ -367,16 +361,14 @@ class Wip(TypedDict):
         return embed
 
     def soundcloud_description(self):
-        linked_users = {x.discord: x.sc for x in state().links}
-
         vocalists = self.credit.vocalists
-        vocalists = (v for v in vocalists if v in linked_users)
-        vocalists = ["@" + linked_users[v].permalink for v in vocalists]
+        vocalists = (v for v in vocalists if v in state().links)
+        vocalists = ["@" + state().links[v].permalink for v in vocalists]
         vocalists = vocalists or ["nobody"]
 
         producers = self.credit.producers
-        producers = (p for p in producers if p in linked_users)
-        producers = ["@" + linked_users[p].permalink for p in producers]
+        producers = (p for p in producers if p in state().links)
+        producers = ["@" + state().links[p].permalink for p in producers]
         producers = producers or ["nobody"]
 
         return "\n".join(
@@ -384,8 +376,7 @@ class Wip(TypedDict):
 
     def raise_on_unlinked_members(self):
         members = set(self.credit.vocalists + self.credit.producers)
-        linked = set(x.discord for x in state().links)
-        unlinked = members - linked
+        unlinked = members - set(*state().links.keys())
         if not unlinked:
             return
 
@@ -395,8 +386,8 @@ class Wip(TypedDict):
             "\nUse `/linksc` to link their accounts.")
 
     async def edit(self, *,
-                   name: Optional[str] = None,
-                   progress: Optional[Union[str, int]] = None):
+                   name: str | None = None,
+                   progress: str | int | None = None):
 
         if name is not None:
             # check for name collision

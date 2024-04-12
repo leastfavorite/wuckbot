@@ -117,23 +117,3 @@ class JsonFile(TypedDict, metaclass=JsonFileMeta):
     # define here so autocomplete can find it
     async def save(self, backups_count: int = 10):
         raise RuntimeError("This should be overwritten on load.")
-
-# import disnake
-#
-# class Secrets(JsonFile):
-#     test_guilds: list[disnake.Guild]
-#     bot_token: str
-#     admin: disnake.User
-#     soundcloud_oauth: str
-#
-# class LinkedUser(TypedDict):
-#     discord: disnake.User
-#     soundcloud: soundcloud.User
-#
-# class State(JsonFile):
-#     wips: list[Wip]
-#     soundclouds: list[LinkedUser]
-
-# TODO!
-# - implement serializers for soundcloud stuff
-# - get main back to running
